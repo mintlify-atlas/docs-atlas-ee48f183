@@ -1,0 +1,154 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "Zuko",
+  "projectDescription": "Normalizing flows in PyTorch for density estimation and generative modeling",
+  "theme": "aspen",
+  "primaryColor": "#5d6c75",
+  "lightColor": "#b5bec1",
+  "darkColor": "#f37a65",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/normalizing-flows",
+              "concepts/lazy-distributions",
+              "concepts/transformations"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/training-flows",
+              "guides/custom-flows",
+              "guides/bayesian-inference",
+              "guides/variational-autoencoders"
+            ]
+          },
+          {
+            "group": "Tutorials",
+            "pages": [
+              "tutorials/basics",
+              "tutorials/forward-kl",
+              "tutorials/reverse-kl",
+              "tutorials/bayesian-flows",
+              "tutorials/vae"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Flows",
+            "pages": [
+              "api/flows/overview",
+              "api/flows/nsf",
+              "api/flows/maf",
+              "api/flows/realnvp",
+              "api/flows/nice",
+              "api/flows/naf",
+              "api/flows/unaf",
+              "api/flows/cnf",
+              "api/flows/ncsf",
+              "api/flows/sospf",
+              "api/flows/bpf",
+              "api/flows/gf",
+              "api/flows/gmm"
+            ]
+          },
+          {
+            "group": "Core Components",
+            "pages": [
+              "api/core/lazy-distributions",
+              "api/core/lazy-transforms",
+              "api/core/flow-class"
+            ]
+          },
+          {
+            "group": "Distributions",
+            "pages": [
+              "api/distributions/overview",
+              "api/distributions/normalizing-flow",
+              "api/distributions/special"
+            ]
+          },
+          {
+            "group": "Transforms",
+            "pages": [
+              "api/transforms/overview",
+              "api/transforms/autoregressive",
+              "api/transforms/coupling",
+              "api/transforms/spline",
+              "api/transforms/polynomial",
+              "api/transforms/neural",
+              "api/transforms/misc"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/nn",
+              "api/utils",
+              "api/bayesian",
+              "api/mixtures"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multiple normalizing flow architectures (NSF, MAF, RealNVP, NICE, NAF, UNAF, CNF, etc.)",
+    "LazyDistribution and LazyTransform for conditional flows",
+    "PyTorch nn.Module integration with GPU support",
+    "Autoregressive, coupling, and spline-based transformations",
+    "Neural and polynomial transformations",
+    "Bayesian inference support",
+    "Custom flow composition",
+    "Variational autoencoder integration"
+  ],
+  "publicApiSurface": [
+    "zuko.flows.NSF",
+    "zuko.flows.MAF",
+    "zuko.flows.RealNVP",
+    "zuko.flows.NICE",
+    "zuko.flows.NAF",
+    "zuko.flows.UNAF",
+    "zuko.flows.CNF",
+    "zuko.flows.NCSF",
+    "zuko.flows.SOSPF",
+    "zuko.flows.BPF",
+    "zuko.flows.GF",
+    "zuko.flows.GMM",
+    "zuko.flows.Flow",
+    "zuko.flows.LazyDistribution",
+    "zuko.flows.LazyTransform",
+    "zuko.flows.UnconditionalDistribution",
+    "zuko.flows.UnconditionalTransform",
+    "zuko.distributions.NormalizingFlow",
+    "zuko.distributions.DiagNormal",
+    "zuko.distributions.BoxUniform",
+    "zuko.transforms.MonotonicRQSTransform",
+    "zuko.transforms.AutoregressiveTransform",
+    "zuko.transforms.CouplingTransform",
+    "zuko.transforms.RotationTransform",
+    "zuko.transforms.PermutationTransform",
+    "zuko.nn.MLP",
+    "zuko.nn.MaskedMLP",
+    "zuko.utils.broadcast",
+    "zuko.utils.odeint"
+  ]
+}
