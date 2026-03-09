@@ -1,0 +1,84 @@
+---
+title: Distributions Overview
+description: Parameterizable probability distributions in Zuko
+---
+
+The `zuko.distributions` module provides a collection of probability distributions that extend PyTorch's distribution framework. These distributions are designed to work seamlessly with normalizing flows and support various probabilistic modeling tasks.
+
+## Core Distribution
+
+### NormalizingFlow
+
+The primary distribution for implementing normalizing flows through transformations.
+
+- [NormalizingFlow](/api/distributions/normalizing-flow) - Transform a base distribution through an invertible transformation
+
+## Special Distributions
+
+Zuko provides several specialized distributions for different modeling scenarios:
+
+### Multivariate Distributions
+
+- [DiagNormal](/api/distributions/special#diagnormal) - Multivariate normal with diagonal covariance
+- [BoxUniform](/api/distributions/special#boxuniform) - Uniform distribution over a hypercube
+- [Joint](/api/distributions/special#joint) - Concatenation of independent random variables
+
+### Mixture and Composition
+
+- [Mixture](/api/distributions/special#mixture) - Weighted mixture of distributions
+- [TransformedUniform](/api/distributions/special#transformeduniform) - Uniformly distributed after transformation
+- [Truncated](/api/distributions/special#truncated) - Truncate a distribution between bounds
+
+### Shape-Based Distributions
+
+- [GeneralizedNormal](/api/distributions/special#generalizednormal) - Generalized normal with shape parameter β
+
+### Order Statistics
+
+- [Sort](/api/distributions/special#sort) - Ordered draws from a base distribution
+- [TopK](/api/distributions/special#topk) - Top k elements from n draws
+- [Minimum](/api/distributions/special#minimum) - Minimum of n draws
+- [Maximum](/api/distributions/special#maximum) - Maximum of n draws
+
+## Exported Classes
+
+All distributions are exported from `zuko.distributions`:
+
+```python
+from zuko.distributions import (
+    BoxUniform,
+    DiagNormal,
+    GeneralizedNormal,
+    Joint,
+    Maximum,
+    Minimum,
+    Mixture,
+    NormalizingFlow,
+    Sort,
+    TopK,
+    TransformedUniform,
+    Truncated,
+)
+```
+
+## Key Features
+
+- **PyTorch Integration**: All distributions inherit from `torch.distributions.Distribution`
+- **Differentiable Sampling**: Most distributions support `rsample()` for reparameterized gradients
+- **Batch Operations**: Full support for batched sampling and probability computation
+- **Composability**: Distributions can be combined and transformed flexibly
+
+## Common Methods
+
+All distributions in this module support standard PyTorch distribution methods:
+
+- `sample(shape)` - Draw samples from the distribution
+- `rsample(shape)` - Draw reparameterized samples (when supported)
+- `log_prob(x)` - Compute log probability density/mass
+- `batch_shape` - Shape of the batch dimensions
+- `event_shape` - Shape of a single sample
+- `expand(batch_shape)` - Expand to a new batch shape
+
+<Note>
+Zuko sets `Distribution._validate_args = False` by default for performance. Enable validation manually if needed for debugging.
+</Note>

@@ -1,0 +1,177 @@
+---
+title: Neural Spline Flow (NSF)
+description: Normalizing flow with monotonic rational-quadratic spline transformations
+---
+
+## Overview
+
+Neural Spline Flow (NSF) uses monotonic rational-quadratic spline transformations to create highly expressive normalizing flows. The splines provide smooth, invertible transformations that can model complex distributions.
+
+<Note>
+  Spline transformations are defined over the domain `[-5, 5]`. Features outside this range are not transformed. It is recommended to standardize features (zero mean, unit variance) before training.
+</Note>
+
+## Reference
+
+**Neural Spline Flows** (Durkan et al., 2019)  
+[https://arxiv.org/abs/1906.04032](https://arxiv.org/abs/1906.04032)
+
+## Class Definition
+
+```python
+zuko.flows.NSF(
+    features: int,
+    context: int = 0,
+    bins: int = 8,
+    transforms: int = 3,
+    randperm: bool = False,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="features" type="int" required>
+  The number of features in the data.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional density estimation.
+</ParamField>
+
+<ParamField path="bins" type="int" default="8">
+  The number of bins K in the rational-quadratic spline. More bins allow for more complex transformations but increase computational cost.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of autoregressive transformations to stack. More transformations increase expressivity.
+</ParamField>
+
+<ParamField path="randperm" type="bool" default="False">
+  Whether features are randomly permuted between transformations. If `False`, features alternate between ascending and descending order.
+</ParamField>
+
+<ParamField path="**kwargs" type="dict">
+  Additional keyword arguments passed to `MaskedAutoregressiveTransform`, such as:
+  - `hidden_features`: List of hidden layer sizes (default: `[64, 64]`)
+  - `activation`: Activation function (default: `ReLU`)
+  - `passes`: Number of passes for coupling (default: `features` for fully autoregressive)
+</ParamField>
+
+## Usage Example
+
+```python
+import torch
+import zuko
+
+# Create an unconditional NSF
+flow = zuko.flows.NSF(
+    features=3,
+    bins=16,
+    transforms=5,
+    hidden_features=[128, 128]
+)
+
+# Sample from the flow
+dist = flow()
+samples = dist.sample((1000,))
+print(samples.shape)  # torch.Size([1000, 3])
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+print(log_prob.shape)  # torch.Size([1000])
+```
+
+### Conditional Flow
+
+```python
+# Create a conditional NSF
+flow = zuko.flows.NSF(
+    features=3,
+    context=5,
+    bins=16,
+    transforms=5
+)
+
+# Sample conditioned on context
+context = torch.randn(5)
+dist = flow(context)
+samples = dist.sample((1000,))
+
+# Training loop
+optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
+
+for x, c in dataloader:
+    optimizer.zero_grad()
+    loss = -flow(c).log_prob(x).mean()
+    loss.backward()
+    optimizer.step()
+```
+
+### Coupling Transformations
+
+```python
+# Use coupling instead of fully autoregressive
+# This is faster for high-dimensional data
+flow = zuko.flows.NSF(
+    features=100,
+    bins=8,
+    transforms=5,
+    passes=2  # Coupling with 2 passes
+)
+```
+
+## Methods
+
+### `forward(c=None)`
+
+Returns a normalizing flow distribution.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `NormalizingFlow`: A distribution with the following methods:
+  - `sample(shape)`: Sample from the distribution
+  - `log_prob(x)`: Compute log probability of samples
+  - `rsample(shape)`: Reparameterized sampling (supports gradients)
+
+## When to Use NSF
+
+<Check>**Good for:**</Check>
+
+- General-purpose density estimation
+- Complex, multimodal distributions
+- Smooth, continuous data
+- When you need high expressivity
+
+<Warning>**Consider alternatives if:**</Warning>
+
+- You need very fast sampling (use RealNVP)
+- Your features are outside `[-5, 5]` and can't be standardized
+- You have limited compute (use MAF with fewer bins)
+
+## Tips
+
+1. **Standardize your data**: NSF works best when features are normalized to have zero mean and unit variance.
+
+2. **Tune the number of bins**: Start with 8-16 bins. More bins = more expressivity but slower.
+
+3. **Adjust transformations**: Use 3-5 transformations for most tasks. More helps for very complex distributions.
+
+4. **Use coupling for high dimensions**: Set `passes=2` when features > 50 for faster computation.
+
+## Architecture Details
+
+NSF is built on top of Masked Autoregressive Flow (MAF) with rational-quadratic spline transformations:
+
+- **Base distribution**: Diagonal Gaussian `N(0, I)`
+- **Transformation**: Monotonic rational-quadratic splines with `bins` segments
+- **Neural network**: Masked MLP that predicts spline parameters autoregressively
+- **Parameters per feature**: `3 * bins - 1` (widths, heights, derivatives)
+
+## Related
+
+- [MAF](/api/flows/maf) - The underlying autoregressive architecture
+- [NCSF](/api/flows/ncsf) - Circular variant for periodic data
+- [MonotonicRQSTransform](/api/transforms/spline) - The spline transformation

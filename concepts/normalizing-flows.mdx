@@ -1,0 +1,202 @@
+---
+title: Normalizing Flows
+description: Understanding normalizing flows and density estimation in Zuko
+icon: wave-pulse
+---
+
+## What are Normalizing Flows?
+
+Normalizing flows are a powerful class of generative models that transform a simple base distribution (like a standard normal) into a complex target distribution through a series of invertible transformations. The key insight is that we can express complex probability distributions by warping simple ones.
+
+### Mathematical Foundation
+
+Given a random variable $X$ and a transformation $f$, normalizing flows use the **change of variables formula** to compute the probability density:
+
+$$
+p(X = x) = p(Z = f(x)) \left| \det \frac{\partial f(x)}{\partial x} \right|
+$$
+
+where:
+- $p(Z)$ is a simple base distribution (e.g., standard normal)
+- $f$ is an invertible transformation
+- The determinant term accounts for how the transformation warps space
+
+<Note>
+The absolute value of the Jacobian determinant ensures the density remains non-negative, as it measures how volumes change under the transformation.
+</Note>
+
+### How Flows Enable Density Estimation
+
+Normalizing flows enable efficient density estimation through two key operations:
+
+1. **Sampling**: Draw $z \sim p(Z)$ from the base distribution and map through the inverse: $x = f^{-1}(z)$
+2. **Density evaluation**: For any point $x$, compute $p(x)$ using the change of variables formula
+
+This bidirectional property makes flows uniquely powerful for generative modeling, as they support both:
+- Fast sampling (forward direction)
+- Exact likelihood computation (inverse direction)
+
+## The NormalizingFlow Class
+
+Zuko implements normalizing flows through the `NormalizingFlow` distribution class, which wraps PyTorch's `Distribution` interface.
+
+```python
+from zuko.distributions import NormalizingFlow
+from torch.distributions import Normal
+from torch.distributions.transforms import ExpTransform
+import torch
+
+# Create a flow: log-normal distribution
+base = Normal(0.0, 1.0)
+transform = ExpTransform()
+flow = NormalizingFlow(transform, base)
+
+# Sample from the flow
+samples = flow.sample((1000,))
+
+# Evaluate log probability
+x = torch.tensor([1.5, 2.0, 0.5])
+log_prob = flow.log_prob(x)
+```
+
+### Architecture
+
+The `NormalizingFlow` class (defined in `zuko/distributions.py:39-139`) connects a transformation with a base distribution:
+
+```python
+class NormalizingFlow(Distribution):
+    def __init__(self, transform: Transform, base: Distribution) -> None:
+        super().__init__()
+        
+        # Handle event dimension alignment
+        reinterpreted = transform.codomain.event_dim - len(base.event_shape)
+        if reinterpreted > 0:
+            base = Independent(base, reinterpreted)
+        
+        self.transform = transform
+        self.base = base
+```
+
+<Info>
+The `NormalizingFlow` class automatically handles dimension alignment between the transformation's codomain and the base distribution's event shape.
+</Info>
+
+### Log Probability Computation
+
+The log probability implements the change of variables formula:
+
+```python
+def log_prob(self, x: Tensor) -> Tensor:
+    z, ladj = self.transform.call_and_ladj(x)
+    return self.base.log_prob(z) + ladj
+```
+
+where:
+- `z = f(x)` is the transformed value
+- `ladj` is the log absolute determinant of the Jacobian
+- The sum combines base log probability with the volume correction
+
+### Sampling
+
+Sampling uses the inverse transformation:
+
+```python
+def rsample(self, shape: Size = ()) -> Tensor:
+    if self.base.has_rsample:
+        z = self.base.rsample(shape)
+    else:
+        z = self.base.sample(shape)
+    
+    return self.transform.inv(z)
+```
+
+<Note>
+The method uses `rsample` (reparameterized sampling) when available to enable gradient-based optimization through the sampling process.
+</Note>
+
+### Efficient Sampling with Log Probability
+
+For training, you often need both samples and their log probabilities. The `rsample_and_log_prob` method computes both efficiently:
+
+```python
+def rsample_and_log_prob(self, shape: Size = ()) -> tuple[Tensor, Tensor]:
+    z = self.base.rsample(shape)
+    x, ladj = self.transform.inv.call_and_ladj(z)
+    return x, self.base.log_prob(z) - ladj
+```
+
+Notice the sign change: when going from $Z$ to $X$ via $g = f^{-1}$, the log probability becomes:
+
+$$
+\log p(X = x) = \log p(Z = g(x)) - \log \left| \det \frac{\partial g(x)}{\partial x} \right|
+$$
+
+## Practical Example
+
+Here's a complete example building a normalizing flow for 2D data:
+
+```python
+import torch
+from torch.distributions import Normal
+from torch.distributions.transforms import AffineTransform
+from zuko.distributions import NormalizingFlow, DiagNormal
+
+# Define base distribution (2D standard normal)
+base = DiagNormal(torch.zeros(2), torch.ones(2))
+
+# Define transformation (affine)
+scale = torch.tensor([[2.0, 0.0], [0.5, 1.5]])
+shift = torch.tensor([1.0, -0.5])
+transform = AffineTransform(shift, scale)
+
+# Create flow
+flow = NormalizingFlow(transform, base)
+
+# Generate samples
+samples = flow.sample((1000,))  # Shape: (1000, 2)
+
+# Evaluate density
+log_density = flow.log_prob(samples)
+print(f"Mean log density: {log_density.mean():.4f}")
+```
+
+## Composing Multiple Transformations
+
+Real-world flows typically compose multiple transformations. Zuko's `ComposedTransform` enables this:
+
+```python
+from zuko.transforms import ComposedTransform
+from torch.distributions.transforms import TanhTransform, AffineTransform
+
+# Stack multiple transformations
+transforms = ComposedTransform(
+    AffineTransform(0.0, 2.0),  # Scale
+    TanhTransform(),             # Squash to [-1, 1]
+    AffineTransform(0.5, 0.5),   # Shift and scale to [0, 1]
+)
+
+flow = NormalizingFlow(transforms, Normal(0.0, 1.0))
+```
+
+<Warning>
+When composing transformations, ensure domains and codomains align properly. The output domain of transformation $f_i$ must match the input domain of $f_{i+1}$.
+</Warning>
+
+## References
+
+The implementation follows these foundational papers:
+
+- **Tabak et al. (2013)** - [A Family of Non-parametric Density Estimation Algorithms](https://onlinelibrary.wiley.com/doi/abs/10.1002/cpa.21423)
+- **Rezende & Mohamed (2015)** - [Variational Inference with Normalizing Flows](https://arxiv.org/abs/1505.05770)
+- **Papamakarios et al. (2021)** - [Normalizing Flows for Probabilistic Modeling and Inference](https://arxiv.org/abs/1912.02762)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Lazy Distributions" icon="clock" href="/concepts/lazy-distributions">
+    Learn how Zuko makes flows trainable with PyTorch
+  </Card>
+  <Card title="Transformations" icon="shuffle" href="/concepts/transformations">
+    Explore the transformation building blocks
+  </Card>
+</CardGroup>

@@ -1,0 +1,339 @@
+---
+title: Utilities
+description: General purpose utility functions for numerical computation
+---
+
+The `zuko.utils` module provides utility functions for broadcasting, root-finding, numerical integration, and ODE solving. These utilities support gradient propagation through implicit differentiation and automatic differentiation.
+
+## broadcast
+
+Broadcasts tensors together while preserving specified trailing dimensions.
+
+The term broadcasting describes how PyTorch treats tensors with different shapes during arithmetic operations. This function extends broadcasting to selectively preserve trailing dimensions.
+
+<ParamField path="*tensors" type="Tensor" required>
+  The tensors to broadcast
+</ParamField>
+
+<ParamField path="ignore" type="int | Sequence[int]" default="0">
+  The number(s) of trailing dimensions not to broadcast
+</ParamField>
+
+**Returns:** The broadcasted tensors as a list
+
+### Example
+
+```python
+import torch
+from zuko.utils import broadcast
+
+# Broadcast with preserved dimensions
+x = torch.rand(3, 1, 2)
+y = torch.rand(4, 5)
+
+x, y = broadcast(x, y, ignore=1)
+print(x.shape)  # torch.Size([3, 4, 2])
+print(y.shape)  # torch.Size([3, 4, 5])
+
+# The last dimension of each tensor is preserved
+# The leading dimensions are broadcasted together
+```
+
+---
+
+## bisection
+
+Applies the bisection method to find $x$ between bounds $a$ and $b$ such that $f_\phi(x)$ is close to $y$.
+
+Gradients are propagated through $y$ and $\phi$ via implicit differentiation.
+
+<ParamField path="f" type="Callable[[Tensor], Tensor]" required>
+  A univariate function $f_\phi$
+</ParamField>
+
+<ParamField path="y" type="Tensor" required>
+  The target value $y$
+</ParamField>
+
+<ParamField path="a" type="float | Tensor" required>
+  The lower bound such that $f_\phi(a) \leq y$
+</ParamField>
+
+<ParamField path="b" type="float | Tensor" required>
+  The upper bound such that $y \leq f_\phi(b)$
+</ParamField>
+
+<ParamField path="n" type="int" default="16">
+  The number of bisection iterations
+</ParamField>
+
+<ParamField path="phi" type="Iterable[Tensor]" default="()">
+  The parameters $\phi$ of $f_\phi$
+</ParamField>
+
+**Returns:** The solution $x$
+
+### Example
+
+```python
+import torch
+from zuko.utils import bisection
+
+# Find x such that cos(x) = 0
+f = torch.cos
+y = torch.tensor(0.0)
+x = bisection(f, y, 2.0, 1.0, n=16)
+print(x)  # tensor(1.5708) ≈ π/2
+
+# With gradients
+y = torch.tensor(0.5, requires_grad=True)
+x = bisection(torch.cos, y, 0.0, torch.pi/2)
+loss = x.sum()
+loss.backward()
+print(y.grad)  # Gradients flow through the root-finding
+```
+
+<Note>
+The bisection method requires that $f$ is continuous and $f(a) \leq y \leq f(b)$. Gradients are computed via implicit differentiation without storing intermediate bisection states.
+</Note>
+
+---
+
+## gauss_legendre
+
+Estimates the definite integral of a function $f_\phi(x)$ from $a$ to $b$ using an $n$-point Gauss-Legendre quadrature:
+
+$$
+\int_a^b f_\phi(x) \, dx \approx (b - a) \sum_{i = 1}^n w_i f_\phi(x_i)
+$$
+
+<ParamField path="f" type="Callable[[Tensor], Tensor]" required>
+  A univariate function $f_\phi$
+</ParamField>
+
+<ParamField path="a" type="Tensor" required>
+  The lower integration limit $a$
+</ParamField>
+
+<ParamField path="b" type="Tensor" required>
+  The upper integration limit $b$
+</ParamField>
+
+<ParamField path="n" type="int" default="3">
+  The number of quadrature points
+</ParamField>
+
+<ParamField path="phi" type="Iterable[Tensor]" default="()">
+  The parameters $\phi$ of $f_\phi$
+</ParamField>
+
+**Returns:** The definite integral estimation
+
+### Example
+
+```python
+import torch
+from zuko.utils import gauss_legendre
+
+# Integrate exp(-x^2) from -0.69 to 4.2
+f = lambda x: torch.exp(-x**2)
+a, b = torch.tensor([-0.69, 4.2])
+
+result = gauss_legendre(f, a, b, n=16)
+print(result)  # tensor(1.4807)
+
+# With parametric function
+w = torch.tensor(2.0, requires_grad=True)
+f = lambda x: torch.exp(-w * x**2)
+result = gauss_legendre(f, a, b, n=16, phi=(w,))
+result.backward()
+print(w.grad)  # Gradients flow through w
+```
+
+<Note>
+Higher values of `n` provide more accurate integration at the cost of more function evaluations. For smooth functions, `n=16` typically provides good accuracy.
+</Note>
+
+---
+
+## odeint
+
+Integrates a system of first-order ordinary differential equations (ODEs):
+
+$$
+\frac{dx}{dt} = f_\phi(t, x)
+$$
+
+from $t_0$ to $t_1$ using the adaptive Dormand-Prince method. The output is the final state:
+
+$$
+x(t_1) = x_0 + \int_{t_0}^{t_1} f_\phi(t, x(t)) \, dt
+$$
+
+Gradients are propagated through $x_0$, $t_0$, $t_1$, and $\phi$ via the adaptive checkpoint adjoint (ACA) method.
+
+<ParamField path="f" type="Callable[[Tensor, Tensor], Tensor]" required>
+  A system of first-order ODEs $f_\phi(t, x)$
+</ParamField>
+
+<ParamField path="x" type="Tensor | Sequence[Tensor]" required>
+  The initial state $x_0$
+</ParamField>
+
+<ParamField path="t0" type="float | Tensor" required>
+  The initial integration time $t_0$
+</ParamField>
+
+<ParamField path="t1" type="float | Tensor" required>
+  The final integration time $t_1$
+</ParamField>
+
+<ParamField path="phi" type="Iterable[Tensor]" default="()">
+  The parameters $\phi$ of $f_\phi$
+</ParamField>
+
+<ParamField path="atol" type="float" default="1e-6">
+  The absolute tolerance for adaptive stepping
+</ParamField>
+
+<ParamField path="rtol" type="float" default="1e-5">
+  The relative tolerance for adaptive stepping
+</ParamField>
+
+**Returns:** The final state $x(t_1)$
+
+### Example
+
+```python
+import torch
+from zuko.utils import odeint
+
+# Solve dx/dt = x @ A from t=0 to t=1
+A = torch.randn(3, 3)
+f = lambda t, x: x @ A
+x0 = torch.randn(3)
+
+x1 = odeint(f, x0, 0.0, 1.0)
+print(x1)  # tensor([-1.4596,  0.5008,  1.5828])
+
+# With gradients
+A = torch.randn(3, 3, requires_grad=True)
+x0 = torch.randn(3, requires_grad=True)
+f = lambda t, x: x @ A
+
+x1 = odeint(f, x0, 0.0, 1.0, phi=(A,))
+loss = x1.square().sum()
+loss.backward()
+print(A.grad)  # Gradients computed via adjoint method
+```
+
+### Use Cases
+
+ODE integration is used for:
+
+- **Continuous normalizing flows (CNF)**: Where transformations are defined via ODEs
+- **Neural ODEs**: Parameterizing transformations with neural networks
+- **Time-continuous dynamics**: Modeling physical systems
+
+```python
+from zuko.flows import CNF
+
+# Continuous normalizing flow uses odeint internally
+flow = CNF(features=3, context=2, hidden_features=[64, 64])
+```
+
+<Note>
+**References:**
+
+- Neural Ordinary Differential Equations (Chen et al., 2018) - [arxiv.org/abs/1806.07366](https://arxiv.org/abs/1806.07366)
+- Adaptive Checkpoint Adjoint Method (Zhuang et al., 2020) - [arxiv.org/abs/2006.02493](https://arxiv.org/abs/2006.02493)
+
+The adjoint method avoids storing intermediate integration states, making it memory-efficient for deep neural ODEs.
+</Note>
+
+---
+
+## Partial
+
+A version of `functools.partial` that is a `torch.nn.Module`, allowing partial application of functions with automatic parameter/buffer registration.
+
+<ParamField path="f" type="Callable" required>
+  An arbitrary callable. If `f` is a module, it is registered as a submodule
+</ParamField>
+
+<ParamField path="*args">
+  The positional arguments passed to `f`
+</ParamField>
+
+<ParamField path="buffer" type="bool" default="False">
+  Whether tensor arguments are registered as buffers (True) or parameters (False)
+</ParamField>
+
+<ParamField path="**kwargs">
+  The keyword arguments passed to `f`
+</ParamField>
+
+### Example
+
+```python
+import torch
+import torch.nn as nn
+from zuko.utils import Partial
+
+# Partial application with tensor
+increment = Partial(torch.add, torch.tensor(1.0), buffer=True)
+print(increment(torch.arange(3)))  # tensor([1., 2., 3.])
+
+# Partial linear layer
+weight = torch.randn(5, 3)
+linear = Partial(torch.nn.functional.linear, weight=weight)
+x = torch.rand(2, 3)
+y = linear(x)  # shape: (2, 5)
+
+# Partial distribution
+f = torch.distributions.Normal
+loc, scale = torch.zeros(3), torch.ones(3)
+dist = Partial(f, loc, scale, buffer=True)
+samples = dist().sample()  # Sample from Normal(0, 1)
+```
+
+---
+
+## unpack
+
+Unpacks a flattened tensor into multiple tensors with specified shapes.
+
+<ParamField path="x" type="Tensor" required>
+  A packed tensor with shape $(*, D)$
+</ParamField>
+
+<ParamField path="shapes" type="Sequence[Size]" required>
+  A sequence of shapes $S_i$ corresponding to the total number of elements $D$
+</ParamField>
+
+**Returns:** The unpacked tensors with shapes $(*, S_i)$
+
+### Example
+
+```python
+import torch
+from zuko.utils import unpack
+
+# Pack multiple tensors into one
+x = torch.randn(26)
+
+# Unpack into original shapes
+y, z = unpack(x, ((1, 2, 3), (4, 5)))
+print(y.shape)  # torch.Size([1, 2, 3])
+print(z.shape)  # torch.Size([4, 5])
+
+# With batch dimension
+x = torch.randn(8, 26)
+y, z = unpack(x, ((1, 2, 3), (4, 5)))
+print(y.shape)  # torch.Size([8, 1, 2, 3])
+print(z.shape)  # torch.Size([8, 4, 5])
+```
+
+<Note>
+This utility is commonly used in normalizing flows where multiple parameters (means, scales, etc.) are predicted by a single neural network and need to be unpacked into their respective shapes.
+</Note>

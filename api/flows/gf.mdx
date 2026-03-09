@@ -1,0 +1,410 @@
+---
+title: Gaussianization Flow (GF)
+description: Normalizing flow using element-wise Gaussianization transformations
+---
+
+## Overview
+
+Gaussianization Flow (GF) uses element-wise transformations combined with rotations to transform data into a Gaussian distribution. Unlike autoregressive flows, GF transforms all features simultaneously using element-wise operations.
+
+<Warning>
+  Invertibility is only guaranteed for features within the interval `[-10, 10]`. It is recommended to standardize features (zero mean, unit variance) before training.
+</Warning>
+
+## Reference
+
+**Gaussianization Flows** (Meng et al., 2020)  
+[https://arxiv.org/abs/2003.01941](https://arxiv.org/abs/2003.01941)
+
+## Class Definition
+
+```python
+zuko.flows.GF(
+    features: int,
+    context: int = 0,
+    transforms: int = 3,
+    components: int = 8,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="features" type="int" required>
+  The number of features in the data.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional density estimation.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of Gaussianization transformations to stack.
+</ParamField>
+
+<ParamField path="components" type="int" default="8">
+  The number of mixture components in each Gaussianization transformation. More components increase expressivity.
+</ParamField>
+
+<ParamField path="**kwargs" type="dict">
+  Additional keyword arguments passed to `ElementWiseTransform`:
+  - `hidden_features`: Hidden layer sizes (default: `[64, 64]`)
+  - `activation`: Activation function (default: `ReLU`)
+</ParamField>
+
+## Usage Example
+
+```python
+import torch
+import zuko
+
+# Create an unconditional GF
+flow = zuko.flows.GF(
+    features=5,
+    transforms=5,
+    components=16,
+    hidden_features=[128, 128]
+)
+
+# Sample from the flow
+dist = flow()
+samples = dist.sample((1000,))
+print(samples.shape)  # torch.Size([1000, 5])
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+print(log_prob.shape)  # torch.Size([1000])
+```
+
+### Conditional Flow
+
+```python
+# Create a conditional GF
+flow = zuko.flows.GF(
+    features=3,
+    context=5,
+    transforms=5,
+    components=12
+)
+
+context = torch.randn(5)
+dist = flow(context)
+samples = dist.sample((100,))
+```
+
+### Training Example
+
+```python
+import torch.optim as optim
+
+flow = zuko.flows.GF(
+    features=10,
+    transforms=5,
+    components=16,
+    hidden_features=[256, 256]
+)
+
+optimizer = optim.Adam(flow.parameters(), lr=1e-3)
+
+for epoch in range(100):
+    for x in dataloader:
+        optimizer.zero_grad()
+        
+        # Ensure data is in [-10, 10]
+        x = torch.clamp(x, -10, 10)
+        
+        loss = -flow().log_prob(x).mean()
+        loss.backward()
+        optimizer.step()
+```
+
+## Methods
+
+### `forward(c=None)`
+
+Returns a normalizing flow distribution.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `NormalizingFlow`: A distribution with:
+  - `sample(shape)`: Sample from the distribution
+  - `log_prob(x)`: Compute log probability of samples
+  - `rsample(shape)`: Reparameterized sampling
+
+## When to Use GF
+
+<Check>**Good for:**</Check>
+
+- Tabular data
+- When features have different marginal distributions
+- Medium-dimensional problems (10-100 features)
+- When you want rotation-invariant transformations
+- Fast parallel transformations
+
+<Warning>**Consider alternatives if:**</Warning>
+
+- You need maximum expressivity (use NSF or NAF)
+- You have very high-dimensional data (> 100 features)
+- Your data is outside `[-10, 10]` and can't be standardized
+- You need to model complex feature dependencies (use MAF/NSF)
+
+## Tips
+
+1. **Standardize your data**: GF requires features in `[-10, 10]`. Always normalize inputs.
+
+2. **More components**: Use 12-16 components for complex marginal distributions.
+
+3. **More transformations**: Use 5-10 transformations since each only does element-wise operations.
+
+4. **Rotation matrices**: GF alternates element-wise transforms with random rotations for better mixing.
+
+## Architecture Details
+
+GF alternates between element-wise and rotation transformations:
+
+- **Base distribution**: Diagonal Gaussian `N(0, I)`
+- **Element-wise layer**: Independent Gaussianization per feature
+- **Rotation layer**: Random orthogonal matrix mixing features
+- **Neural network**: MLP predicts mixture parameters per feature
+
+Structure:
+```python
+Gaussianization -> Rotation -> Gaussianization -> Rotation -> ...
+```
+
+## Gaussianization Transform
+
+Each element-wise transformation:
+
+```python
+y_i = GaussianMixtureCDF^{-1}(StandardGaussianCDF(x_i))
+```
+
+This transforms each feature's marginal distribution toward a Gaussian.
+
+The Gaussian mixture has:
+- `components` Gaussians per feature
+- Locations and scales predicted by neural network
+- Conditional on context (if provided)
+
+## Rotation Transformations
+
+Rotations mix features between Gaussianization layers:
+
+```python
+y = R @ x
+```
+
+where `R` is a random orthogonal matrix initialized at creation.
+
+Rotations:
+- Enable features to interact
+- Are fixed (not learned) in Zuko's implementation
+- Preserve distances (orthogonal)
+- Have unit Jacobian determinant
+
+## Element-Wise vs. Autoregressive
+
+| Property | GF (Element-wise) | MAF (Autoregressive) |
+|----------|-------------------|----------------------|
+| Transformation | Parallel | Sequential |
+| Speed | Fast | Slow (inverse) |
+| Dependencies | Via rotations | Direct autoregressive |
+| Expressivity | Medium | Medium-High |
+| Feature mixing | Rotations | Masking |
+
+## Comparison with Other Flows
+
+| Property | GF | MAF | NSF | RealNVP |
+|----------|----|----|-----|----------|
+| Type | Element-wise + Rotation | Autoregressive | Autoregressive | Coupling |
+| Forward | Fast | Fast | Fast | Fast |
+| Inverse | Fast | Slow | Slow | Fast |
+| Expressivity | Medium | Medium | High | Medium |
+| Best for | Tabular | General | General | Images |
+
+## Advanced Usage
+
+### Custom Number of Components
+
+```python
+# More components for complex marginals
+flow = zuko.flows.GF(
+    features=10,
+    transforms=7,
+    components=24,  # Many mixture components
+    hidden_features=[512, 512]
+)
+```
+
+### High-Dimensional Data
+
+```python
+# GF can handle medium-high dimensions efficiently
+flow = zuko.flows.GF(
+    features=100,
+    transforms=10,
+    components=16
+)
+```
+
+### Manual Construction
+
+```python
+from zuko.flows.gaussianization import ElementWiseTransform
+from zuko.transforms import GaussianizationTransform, RotationTransform
+from zuko.lazy import UnconditionalTransform
+import torch
+
+# Build GF manually
+transforms = []
+for i in range(5):
+    # Element-wise Gaussianization
+    transforms.append(
+        ElementWiseTransform(
+            features=10,
+            univariate=GaussianizationTransform,
+            shapes=[(8,), (8,)],  # 8 components
+            hidden_features=[128, 128]
+        )
+    )
+    # Rotation (except after last layer)
+    if i < 4:
+        transforms.append(
+            UnconditionalTransform(
+                RotationTransform,
+                A=torch.randn(10, 10)
+            )
+        )
+```
+
+## Computational Considerations
+
+GF is computationally efficient:
+
+- **Forward pass**: All features transformed in parallel
+- **Inverse pass**: Also parallel (unlike autoregressive)
+- **Memory**: Moderate (stores mixture parameters)
+- **Speed**: Faster than autoregressive flows
+
+## Applications
+
+### Tabular Data Modeling
+
+```python
+# Each feature has different marginal distribution
+flow = zuko.flows.GF(
+    features=num_features,
+    transforms=7,
+    components=12
+)
+
+# GF learns to Gaussianize each feature independently
+# while capturing dependencies via rotations
+```
+
+### Anomaly Detection
+
+```python
+flow = zuko.flows.GF(
+    features=data_dim,
+    transforms=5,
+    components=16
+)
+
+# Train on normal data
+# ... training ...
+
+# Detect anomalies
+test_data = torch.randn(100, data_dim)
+log_prob = flow().log_prob(test_data)
+anomalies = log_prob < threshold
+```
+
+### Data Preprocessing
+
+```python
+# Use GF to preprocess data
+flow = zuko.flows.GF(features=10, transforms=5)
+# ... train ...
+
+# Transform data to Gaussian
+data_gaussianized = flow().base_dist.sample((1000,))
+# Use for downstream tasks
+```
+
+## Interpretability
+
+GF provides some interpretability:
+
+```python
+# After training, examine marginal transformations
+flow = zuko.flows.GF(features=5, transforms=5, components=8)
+# ... train ...
+
+# Each feature's marginal is modeled by a Gaussian mixture
+# Can visualize how each feature is transformed
+import matplotlib.pyplot as plt
+
+x = torch.linspace(-10, 10, 200)
+for feature_idx in range(5):
+    # Get transformation for this feature
+    # ... extract and plot ...
+    pass
+```
+
+## Limitations
+
+<Warning>
+  **Key limitations:**
+</Warning>
+
+1. **Fixed rotations**: Rotation matrices are random, not learned
+2. **Limited dependencies**: Feature dependencies only via rotations
+3. **Bounded domain**: Requires data in `[-10, 10]`
+4. **Medium expressivity**: Less expressive than NSF or NAF
+
+## Tips for Best Results
+
+1. **Feature engineering**: GF works well when individual features have interesting distributions
+
+2. **Standardization**: Ensure each feature has similar scale
+
+3. **Sufficient transformations**: Use 5-10 layers for good mixing
+
+4. **Component selection**: Start with 8-12 components, increase if needed
+
+5. **Learning rate**: Use smaller learning rates (1e-4) for stability
+
+## Debugging
+
+```python
+import torch
+
+flow = zuko.flows.GF(features=3, transforms=3, components=8)
+
+# Check transformation behavior
+x = torch.randn(1000, 3) * 2  # Data with std=2
+
+with torch.no_grad():
+    dist = flow()
+    log_prob = dist.log_prob(x)
+    print(f"Mean log prob: {log_prob.mean():.4f}")
+    
+    # Sample and check
+    samples = dist.sample((1000,))
+    print(f"Sample mean: {samples.mean(dim=0)}")
+    print(f"Sample std: {samples.std(dim=0)}")
+    
+    # Check if in bounds
+    print(f"Min: {samples.min()}, Max: {samples.max()}")
+```
+
+## Related
+
+- [MAF](/api/flows/maf) - Autoregressive alternative
+- [NSF](/api/flows/nsf) - More expressive autoregressive flow
+- [GaussianizationTransform](/api/transforms) - The element-wise transformation
+- [RotationTransform](/api/transforms/misc) - The rotation transformation

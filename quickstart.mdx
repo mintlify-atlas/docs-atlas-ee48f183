@@ -1,80 +1,311 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Train your first normalizing flow with Zuko in minutes
 ---
 
-## Get started in three steps
+## Overview
 
-Get your documentation site running locally and make your first customization.
+This quickstart guide will show you how to:
+1. Create a normalizing flow
+2. Train it on data using maximum likelihood
+3. Generate samples from the learned distribution
 
-### Step 1: Set up your local environment
+We'll build a Neural Spline Flow (NSF) to model a conditional distribution `p(x | c)`.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+## Basic Example
+
+<Steps>
+  <Step title="Import dependencies">
+    First, import the necessary libraries:
+
+    ```python
+    import torch
+    import zuko
+    ```
+
+    That's it! Zuko is designed to be minimal and intuitive.
+  </Step>
+
+  <Step title="Create a normalizing flow">
+    Create a Neural Spline Flow with 3 sample features and 5 context features:
+
+    ```python
+    # NSF with 3 sample features and 5 context features
+    flow = zuko.flows.NSF(
+        features=3,           # Dimensionality of x
+        context=5,            # Dimensionality of context c
+        transforms=3,         # Number of transformation layers
+        hidden_features=[128] * 3  # Hidden layer sizes
+    )
+    ```
+
+    <Note>
+    The `NSF` class creates a Neural Spline Flow with rational-quadratic splines, one of the most powerful and flexible flow architectures available.
+    </Note>
+
+    The flow is a `torch.nn.Module`, so you can inspect its parameters:
+
+    ```python
+    print(f"Number of parameters: {sum(p.numel() for p in flow.parameters())}")
+    ```
+  </Step>
+
+  <Step title="Prepare your data">
+    For this example, let's create a simple synthetic dataset:
+
+    ```python
+    # Generate synthetic training data
+    # x: samples (batch_size, 3)
+    # c: context (batch_size, 5)
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    def generate_data(batch_size=256):
+        c = torch.randn(batch_size, 5)
+        # Create x that depends on c (for demonstration)
+        x = torch.randn(batch_size, 3) + c[:, :3] * 0.5
+        return x, c
+    ```
+
+    In real applications, `x` and `c` would be your actual data samples and conditioning variables.
+  </Step>
+
+  <Step title="Train the flow">
+    Train the flow by maximizing the log-likelihood of the data:
+
+    ```python
+    # Set up optimizer
+    optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    # Training loop
+    epochs = 100
+    for epoch in range(epochs):
+        # Generate a batch of training data
+        x, c = generate_data(batch_size=256)
+        
+        # Compute negative log-likelihood
+        loss = -flow(c).log_prob(x)  # -log p(x | c)
+        loss = loss.mean()
+        
+        # Optimization step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        # Print progress
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch {epoch + 1}/{epochs}, Loss: {loss.item():.4f}")
+    ```
 
-### Step 2: Deploy your changes
+    <Note>
+    The key line is `flow(c).log_prob(x)`: passing context `c` to the flow returns a distribution `p(x | c)`, which we can then evaluate at points `x`.
+    </Note>
+  </Step>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+  <Step title="Generate samples">
+    Once trained, you can sample from the learned distribution:
+
+    ```python
+    # Create a specific context
+    c_star = torch.randn(1, 5)
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    # Sample 64 points from p(x | c*)
+    with torch.no_grad():
+        samples = flow(c_star).sample((64,))
+    
+    print(f"Generated samples shape: {samples.shape}")  # [64, 3]
+    ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    You can also evaluate the log-probability of new data:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```python
+    # Evaluate log-probability of new points
+    x_new = torch.randn(10, 3)
+    c_new = torch.randn(10, 5)
+    
+    with torch.no_grad():
+        log_prob = flow(c_new).log_prob(x_new)
+    
+    print(f"Log probabilities: {log_prob}")  # [10]
+    ```
+  </Step>
+</Steps>
 
-### Step 3: Go live
+## Complete Working Example
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+Here's a complete, runnable script that ties everything together:
 
-## Next steps
+```python
+import torch
+import zuko
 
-Now that you have your docs running, explore these key features:
+# Create the flow
+flow = zuko.flows.NSF(
+    features=3,
+    context=5,
+    transforms=3,
+    hidden_features=[128] * 3
+)
+
+# Move to GPU if available
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+flow = flow.to(device)
+
+# Training function
+def generate_data(batch_size=256):
+    c = torch.randn(batch_size, 5, device=device)
+    x = torch.randn(batch_size, 3, device=device) + c[:, :3] * 0.5
+    return x, c
+
+# Optimizer
+optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
+
+# Training loop
+print("Training flow...")
+for epoch in range(100):
+    x, c = generate_data()
+    
+    loss = -flow(c).log_prob(x).mean()
+    
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    
+    if (epoch + 1) % 10 == 0:
+        print(f"Epoch {epoch + 1}, Loss: {loss.item():.4f}")
+
+# Sampling
+print("\nGenerating samples...")
+c_star = torch.randn(1, 5, device=device)
+with torch.no_grad():
+    samples = flow(c_star).sample((64,))
+print(f"Generated {samples.shape[0]} samples of dimension {samples.shape[1]}")
+```
+
+## Other Flow Architectures
+
+Zuko provides many pre-built flow architectures. Here are some popular alternatives to NSF:
+
+<CodeGroup>
+  ```python MAF (Masked Autoregressive Flow)
+  # Good for density estimation
+  flow = zuko.flows.MAF(
+      features=3,
+      context=5,
+      transforms=5,
+      hidden_features=[128] * 3
+  )
+  ```
+
+  ```python RealNVP
+  # Fast sampling and evaluation
+  flow = zuko.flows.RealNVP(
+      features=3,
+      context=5,
+      transforms=5,
+      hidden_features=[128] * 3
+  )
+  ```
+
+  ```python CNF (Continuous Normalizing Flow)
+  # Uses neural ODEs
+  flow = zuko.flows.CNF(
+      features=3,
+      context=5,
+      hidden_features=[64, 64]
+  )
+  ```
+
+  ```python UNAF (Unconstrained Neural Autoregressive Flow)
+  # Flexible monotonic transformations
+  flow = zuko.flows.UNAF(
+      features=3,
+      context=5,
+      transforms=3,
+      hidden_features=[128] * 3
+  )
+  ```
+</CodeGroup>
+
+All flows follow the same API: create the flow, train by maximizing `log_prob`, and sample from the learned distribution.
+
+## Building Custom Flows
+
+For more control, you can build custom flows using the `Flow` class:
+
+```python
+from zuko.flows import Flow, UnconditionalDistribution, UnconditionalTransform
+from zuko.flows.autoregressive import MaskedAutoregressiveTransform
+from zuko.distributions import DiagNormal
+from zuko.transforms import RotationTransform
+
+# Custom flow with specific architecture
+flow = Flow(
+    transform=[
+        # First autoregressive transform
+        MaskedAutoregressiveTransform(
+            features=3,
+            context=5,
+            hidden_features=(64, 64)
+        ),
+        # Rotation layer (unconditional)
+        UnconditionalTransform(
+            RotationTransform,
+            torch.randn(3, 3)
+        ),
+        # Second autoregressive transform
+        MaskedAutoregressiveTransform(
+            features=3,
+            context=5,
+            hidden_features=(64, 64)
+        ),
+    ],
+    # Gaussian base distribution
+    base=UnconditionalDistribution(
+        DiagNormal,
+        loc=torch.zeros(3),
+        scale=torch.ones(3),
+        buffer=True,
+    ),
+)
+```
+
+This gives you complete control over:
+- The sequence of transformations
+- The base distribution
+- Which layers are conditional vs unconditional
+- Architecture details of each transformation
+
+## Key Takeaways
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Simple API" icon="code">
+    Create flows with a single line, train with standard PyTorch patterns
+  </Card>
+  <Card title="Conditional Modeling" icon="sitemap">
+    Built-in support for `p(x | c)` - just pass context to the flow
+  </Card>
+  <Card title="Multiple Architectures" icon="layer-group">
+    12+ pre-built flows from recent research papers
+  </Card>
+  <Card title="Full Control" icon="sliders">
+    Build custom flows with the `Flow` class for maximum flexibility
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## What's Next?
+
+Now that you've built your first flow, explore more advanced topics:
+
+<CardGroup cols={2}>
+  <Card title="Flow Architectures" icon="diagram-project" href="/flows/architectures">
+    Learn about different flow architectures and when to use them
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/flows">
+    Detailed documentation of all flows and their parameters
+  </Card>
+  <Card title="Examples" icon="flask" href="/examples">
+    Real-world examples and tutorials
+  </Card>
+  <Card title="Custom Flows" icon="wrench" href="/guides/custom-flows">
+    Build your own flow architectures
+  </Card>
+</CardGroup>

@@ -1,0 +1,235 @@
+---
+title: Masked Autoregressive Flow (MAF)
+description: Normalizing flow with masked autoregressive transformations
+---
+
+## Overview
+
+Masked Autoregressive Flow (MAF) uses masked neural networks to create autoregressive transformations. It's a flexible and widely-used architecture that serves as the foundation for many other flows like NSF.
+
+## Reference
+
+**Masked Autoregressive Flow for Density Estimation** (Papamakarios et al., 2017)  
+[https://arxiv.org/abs/1705.07057](https://arxiv.org/abs/1705.07057)
+
+## Class Definition
+
+```python
+zuko.flows.MAF(
+    features: int,
+    context: int = 0,
+    transforms: int = 3,
+    randperm: bool = False,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="features" type="int" required>
+  The number of features in the data.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional density estimation.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of autoregressive transformations to stack.
+</ParamField>
+
+<ParamField path="randperm" type="bool" default="False">
+  Whether features are randomly permuted between transformations. If `False`, features are in ascending order for even transformations and descending order for odd transformations.
+</ParamField>
+
+<ParamField path="**kwargs" type="dict">
+  Additional keyword arguments passed to `MaskedAutoregressiveTransform`:
+  - `hidden_features`: List of hidden layer sizes (default: `[64, 64]`)
+  - `activation`: Activation function (default: `ReLU`)
+  - `passes`: Number of passes for the inverse (default: `features` for fully autoregressive)
+  - `univariate`: The univariate transformation constructor (default: `MonotonicAffineTransform`)
+  - `shapes`: Parameter shapes for univariate transformations
+</ParamField>
+
+## Usage Example
+
+```python
+import torch
+import zuko
+
+# Create an unconditional MAF
+flow = zuko.flows.MAF(
+    features=3,
+    transforms=3,
+    hidden_features=[64, 64]
+)
+
+# Sample from the flow
+dist = flow()
+samples = dist.sample((1000,))
+print(samples.shape)  # torch.Size([1000, 3])
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+print(log_prob.shape)  # torch.Size([1000])
+```
+
+### Conditional Flow
+
+```python
+# Create a conditional MAF
+flow = zuko.flows.MAF(
+    features=3,
+    context=4,
+    transforms=3
+)
+
+# Example usage
+c = torch.randn(4)
+x = flow(c).sample()
+log_p = flow(c).log_prob(x)
+
+print(x.shape)      # torch.Size([3])
+print(log_p.shape)  # torch.Size([])
+```
+
+### Training Example
+
+```python
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+# Create flow
+flow = zuko.flows.MAF(
+    features=10,
+    transforms=5,
+    hidden_features=[128, 128]
+)
+
+# Training loop
+optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
+
+for epoch in range(100):
+    for x in dataloader:
+        optimizer.zero_grad()
+        
+        # Negative log-likelihood loss
+        loss = -flow().log_prob(x).mean()
+        
+        loss.backward()
+        optimizer.step()
+    
+    print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
+```
+
+### Coupling Transformations
+
+```python
+# Use coupling instead of fully autoregressive
+flow = zuko.flows.MAF(
+    features=100,
+    transforms=3,
+    passes=2  # Coupling with 2 passes
+)
+```
+
+## Methods
+
+### `forward(c=None)`
+
+Returns a normalizing flow distribution.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `NormalizingFlow`: A distribution object with:
+  - `sample(shape)`: Sample from the distribution
+  - `log_prob(x)`: Compute log probability of samples
+  - `rsample(shape)`: Reparameterized sampling (supports gradients)
+
+## When to Use MAF
+
+<Check>**Good for:**</Check>
+
+- General-purpose density estimation
+- Fast training (forward pass is parallel)
+- Flexible baseline for custom flows
+- When you need a simple, well-understood architecture
+
+<Warning>**Limitations:**</Warning>
+
+- Slow sampling (inverse is sequential)
+- Less expressive than NSF or NAF for complex distributions
+- Affine transformations may be limiting for multimodal data
+
+## Tips
+
+1. **Number of transformations**: Start with 3-5. More transformations increase expressivity but add computational cost.
+
+2. **Random permutations**: Set `randperm=True` for better mixing when features have structure.
+
+3. **Hidden layer sizes**: Use `[128, 128]` or `[256, 256]` for complex datasets.
+
+4. **Coupling for speed**: Use `passes=2` for faster inverse when you have many features.
+
+## Architecture Details
+
+MAF consists of:
+
+- **Base distribution**: Diagonal Gaussian `N(0, I)`
+- **Transformations**: Affine transformations with autoregressive conditioning
+- **Neural network**: Masked MLP that ensures autoregressive structure
+- **Parameters per feature**: 2 (location and scale)
+
+Each transformation computes:
+```python
+y_i = x_i * exp(s_i) + t_i
+```
+where `s_i` (scale) and `t_i` (translation) depend on `x_1, ..., x_{i-1}` and context `c`.
+
+## Comparison with Other Flows
+
+| Property | MAF | RealNVP | NSF |
+|----------|-----|---------|-----|
+| Training | Fast | Fast | Medium |
+| Sampling | Slow | Fast | Slow |
+| Expressivity | Medium | Medium | High |
+| Complexity | Low | Low | Medium |
+
+## Advanced Usage
+
+### Custom Univariate Transformations
+
+```python
+from zuko.transforms import MonotonicAffineTransform
+
+# MAF uses affine transformations by default
+flow = zuko.flows.MAF(
+    features=5,
+    univariate=MonotonicAffineTransform,
+    shapes=[(), ()]  # Shapes for (shift, log_scale)
+)
+```
+
+### Custom Masking
+
+```python
+import torch
+
+# Define custom feature ordering
+order = torch.tensor([2, 0, 1, 3, 4])
+
+flow = zuko.flows.MAF(
+    features=5,
+    transforms=3,
+    order=order
+)
+```
+
+## Related
+
+- [NSF](/api/flows/nsf) - MAF with spline transformations
+- [NAF](/api/flows/naf) - MAF with neural transformations
+- [MaskedAutoregressiveTransform](/api/transforms/autoregressive) - The underlying transformation

@@ -1,0 +1,261 @@
+---
+title: Neural Networks
+description: Neural network modules and layers for building normalizing flows
+---
+
+The `zuko.nn` module provides specialized neural network layers and architectures used throughout Zuko, including standard MLPs, masked MLPs for autoregressive models, and monotonic MLPs for monotonic transformations.
+
+## MLP
+
+Creates a multi-layer perceptron (MLP), also known as a fully connected feedforward network.
+
+An MLP is a sequence of non-linear parametric functions:
+
+$$
+h_{i + 1} = a_{i + 1}(h_i W_{i + 1}^T + b_{i + 1})
+$$
+
+where $h_i$ are feature vectors, $x = h_0$ is the input, $y = h_L$ is the output, and $a_i$ are activation functions.
+
+<ParamField path="in_features" type="int" required>
+  The number of input features
+</ParamField>
+
+<ParamField path="out_features" type="int" required>
+  The number of output features
+</ParamField>
+
+<ParamField path="hidden_features" type="Sequence[int]" default="(64, 64)">
+  The numbers of hidden features for each hidden layer
+</ParamField>
+
+<ParamField path="activation" type="Callable[[], nn.Module] | None" default="None">
+  The activation function constructor. If `None`, uses `torch.nn.ReLU`
+</ParamField>
+
+<ParamField path="normalize" type="bool" default="False">
+  Whether features are normalized between layers
+</ParamField>
+
+<ParamField path="**kwargs">
+  Keyword arguments passed to `Linear` layer
+</ParamField>
+
+### Example
+
+```python
+import torch
+import torch.nn as nn
+from zuko.nn import MLP
+
+# Create an MLP with custom architecture
+net = MLP(64, 1, [32, 16], activation=nn.ELU)
+print(net)
+# MLP(
+#   (0): Linear(in_features=64, out_features=32, bias=True)
+#   (1): ELU(alpha=1.0)
+#   (2): Linear(in_features=32, out_features=16, bias=True)
+#   (3): ELU(alpha=1.0)
+#   (4): Linear(in_features=16, out_features=1, bias=True)
+# )
+
+x = torch.randn(8, 64)
+y = net(x)  # shape: (8, 1)
+```
+
+---
+
+## Linear
+
+Creates a linear layer with optional stacking support.
+
+Performs the transformation: $y = x W^T + b$
+
+If the `stack` argument is provided, creates a stack of independent linear operators applied to stacked input vectors.
+
+<ParamField path="in_features" type="int" required>
+  The number of input features $C$
+</ParamField>
+
+<ParamField path="out_features" type="int" required>
+  The number of output features $C'$
+</ParamField>
+
+<ParamField path="bias" type="bool" default="True">
+  Whether the layer learns an additive bias $b$
+</ParamField>
+
+<ParamField path="stack" type="int | None" default="None">
+  The number of stacked operators $S$
+</ParamField>
+
+### Example
+
+```python
+import torch
+from zuko.nn import Linear
+
+# Standard linear layer
+layer = Linear(64, 32)
+x = torch.randn(8, 64)
+y = layer(x)  # shape: (8, 32)
+
+# Stacked linear layers
+stacked = Linear(64, 32, stack=5)
+x = torch.randn(8, 5, 64)
+y = stacked(x)  # shape: (8, 5, 32)
+```
+
+---
+
+## MaskedMLP
+
+Creates a masked multi-layer perceptron where the Jacobian structure is controlled by an adjacency matrix.
+
+The resulting MLP is a transformation $y = f(x)$ whose Jacobian entries $\frac{\partial y_i}{\partial x_j}$ are null if $A_{ij} = 0$. This is useful for implementing autoregressive models and coupling layers.
+
+<ParamField path="adjacency" type="BoolTensor" required>
+  The adjacency matrix $A \in \{0, 1\}^{M \times N}$ controlling the Jacobian structure
+</ParamField>
+
+<ParamField path="hidden_features" type="Sequence[int]" default="(64, 64)">
+  The numbers of hidden features for each hidden layer
+</ParamField>
+
+<ParamField path="activation" type="Callable[[], nn.Module] | None" default="None">
+  The activation function constructor. If `None`, uses `torch.nn.ReLU`
+</ParamField>
+
+<ParamField path="residual" type="bool" default="False">
+  Whether to use residual blocks
+</ParamField>
+
+<Note>
+The adjacency matrix determines which output features can depend on which input features. An entry $A_{ij} = 1$ means output $i$ can depend on input $j$, while $A_{ij} = 0$ enforces independence in the Jacobian.
+</Note>
+
+### Example
+
+```python
+import torch
+import torch.nn as nn
+from zuko.nn import MaskedMLP
+
+# Create an adjacency matrix
+adjacency = torch.randn(4, 3) < 0
+print(adjacency)
+# tensor([[False,  True,  True],
+#         [False,  True,  True],
+#         [False, False,  True],
+#         [ True,  True, False]])
+
+# Create masked MLP
+net = MaskedMLP(adjacency, [16, 32], activation=nn.ELU)
+
+# Forward pass
+x = torch.randn(3)
+y = net(x)  # shape: (4,)
+
+# Verify the Jacobian structure matches adjacency
+jac = torch.autograd.functional.jacobian(net, x)
+print(jac)
+# tensor([[ 0.0000, -0.0065,  0.1158],
+#         [ 0.0000, -0.0089,  0.0072],
+#         [ 0.0000,  0.0000,  0.0089],
+#         [-0.0146, -0.0128,  0.0000]])
+# Note: zeros match the False entries in adjacency
+```
+
+### Understanding Masking
+
+Masked MLPs are particularly useful for:
+
+- **Autoregressive models**: Where $y_i$ can only depend on $x_1, \ldots, x_{i-1}$
+- **Coupling layers**: Where some outputs depend on a subset of inputs
+- **Conditional independence**: Enforcing specific dependency structures
+
+```python
+# Autoregressive structure: y_i depends on x_0, ..., x_{i-1}
+autoregressive_adj = torch.tril(torch.ones(4, 4), diagonal=-1).bool()
+print(autoregressive_adj)
+# tensor([[False, False, False, False],
+#         [ True, False, False, False],
+#         [ True,  True, False, False],
+#         [ True,  True,  True, False]])
+
+autoregressive_net = MaskedMLP(autoregressive_adj, [32, 32])
+```
+
+---
+
+## MonotonicMLP
+
+Creates a monotonic multi-layer perceptron where all Jacobian entries $\frac{\partial y_j}{\partial x_i}$ are positive.
+
+This is achieved by using absolute value weights and a special activation function (TwoWayELU) that preserves monotonicity.
+
+<ParamField path="in_features" type="int" required>
+  The number of input features
+</ParamField>
+
+<ParamField path="out_features" type="int" required>
+  The number of output features
+</ParamField>
+
+<ParamField path="hidden_features" type="Sequence[int]" default="(64, 64)">
+  The numbers of hidden features for each hidden layer
+</ParamField>
+
+<ParamField path="**kwargs">
+  Keyword arguments passed to `MLP`
+</ParamField>
+
+<Note>
+Monotonic MLPs use `MonotonicLinear` layers with absolute value weights ($y = x |W|^T + b$) and `TwoWayELU` activations that apply $\text{ELU}(x)$ to half the features and $-\text{ELU}(-x)$ to the other half.
+</Note>
+
+### Example
+
+```python
+import torch
+from zuko.nn import MonotonicMLP
+
+# Create a monotonic MLP
+net = MonotonicMLP(3, 4, [16, 32])
+print(net)
+# MonotonicMLP(
+#   (0): MonotonicLinear(in_features=3, out_features=16, bias=True)
+#   (1): TwoWayELU(alpha=1.0)
+#   (2): MonotonicLinear(in_features=16, out_features=32, bias=True)
+#   (3): TwoWayELU(alpha=1.0)
+#   (4): MonotonicLinear(in_features=32, out_features=4, bias=True)
+# )
+
+# Forward pass
+x = torch.randn(3)
+y = net(x)
+
+# Verify all Jacobian entries are positive
+jac = torch.autograd.functional.jacobian(net, x)
+print(jac)
+# tensor([[1.0492, 1.3094, 1.1711],
+#         [1.1201, 1.3825, 1.2711],
+#         [0.9397, 1.1915, 1.0787],
+#         [1.1049, 1.3635, 1.2592]])
+# All entries are positive!
+```
+
+### Use Cases
+
+Monotonic MLPs are essential for:
+
+- **Monotonic spline transformations**: Neural spline flows require monotonic networks
+- **Quantile functions**: Mapping uniform distributions to arbitrary distributions
+- **Order-preserving transformations**: When you need $f(x_1) < f(x_2)$ whenever $x_1 < x_2$
+
+```python
+from zuko.flows import NSF
+
+# Neural spline flows use monotonic MLPs internally
+flow = NSF(features=3, context=2, transforms=5)
+```

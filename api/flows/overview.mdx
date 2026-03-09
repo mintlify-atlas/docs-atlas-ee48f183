@@ -1,0 +1,185 @@
+---
+title: Flows Overview
+description: Available normalizing flow architectures in Zuko
+---
+
+Zuko provides a comprehensive collection of normalizing flow architectures for density estimation and generative modeling. All flows are implemented as PyTorch modules that can be easily integrated into your models.
+
+## Available Flows
+
+Zuko includes the following flow architectures:
+
+<CardGroup cols={2}>
+  <Card title="Neural Spline Flow (NSF)" icon="chart-line" href="/api/flows/nsf">
+    Monotonic rational-quadratic spline transformations
+  </Card>
+  <Card title="Masked Autoregressive Flow (MAF)" icon="masks-theater" href="/api/flows/maf">
+    Autoregressive transformations with masked networks
+  </Card>
+  <Card title="RealNVP" icon="layer-group" href="/api/flows/realnvp">
+    Coupling transformations with affine layers
+  </Card>
+  <Card title="NICE" icon="cube" href="/api/flows/nice">
+    Non-linear independent components estimation
+  </Card>
+  <Card title="Neural Autoregressive Flow (NAF)" icon="brain" href="/api/flows/naf">
+    Monotonic neural networks for autoregressive flows
+  </Card>
+  <Card title="Unconstrained NAF (UNAF)" icon="infinity" href="/api/flows/unaf">
+    Unconstrained monotonic neural networks
+  </Card>
+  <Card title="Continuous Normalizing Flow (CNF)" icon="wave-square" href="/api/flows/cnf">
+    ODE-based continuous-time flows
+  </Card>
+  <Card title="Neural Circular Spline Flow (NCSF)" icon="circle" href="/api/flows/ncsf">
+    Spline flows for circular/periodic data
+  </Card>
+  <Card title="Sum-of-Squares Polynomial Flow (SOSPF)" icon="square-root-variable" href="/api/flows/sospf">
+    Polynomial transformations with SOS constraints
+  </Card>
+  <Card title="Bernstein Polynomial Flow (BPF)" icon="function" href="/api/flows/bpf">
+    Bounded Bernstein polynomial transformations
+  </Card>
+  <Card title="Gaussianization Flow (GF)" icon="chart-simple" href="/api/flows/gf">
+    Element-wise Gaussianization transformations
+  </Card>
+  <Card title="Gaussian Mixture Model (GMM)" icon="diagram-project" href="/api/flows/gmm">
+    Mixture of Gaussians for density estimation
+  </Card>
+</CardGroup>
+
+## Flow Comparison
+
+| Flow | Type | Key Features | Use Cases |
+|------|------|--------------|----------|
+| NSF | Autoregressive | High expressivity, smooth transformations | General-purpose, complex distributions |
+| MAF | Autoregressive | Fast training, flexible | General-purpose density estimation |
+| RealNVP | Coupling | Fast sampling, parallel | Real-time generation |
+| NICE | Coupling | Simple, interpretable | Baseline, feature learning |
+| NAF | Autoregressive | Universal approximation | High-dimensional data |
+| UNAF | Autoregressive | Flexible monotonicity | Complex dependencies |
+| CNF | Continuous | Theoretically unlimited capacity | Research, complex dynamics |
+| NCSF | Autoregressive | Handles periodicity | Circular/angular data |
+| SOSPF | Autoregressive | Polynomial expressivity | Smooth distributions |
+| BPF | Autoregressive | Bounded transformations | Constrained domains |
+| GF | Element-wise | Rotation-invariant | Tabular data |
+| GMM | Mixture | Interpretable clusters | Clustering, simple densities |
+
+## General Usage Pattern
+
+All flows in Zuko follow a consistent API:
+
+```python
+import torch
+import zuko
+
+# Create a flow
+flow = zuko.flows.NSF(
+    features=3,      # Number of features
+    context=4,       # Number of context features (optional)
+    transforms=5,    # Number of transformations
+    hidden_features=[128, 128],  # Hidden layer sizes
+)
+
+# Sample from the flow
+context = torch.randn(4)  # Optional context
+dist = flow(context)
+samples = dist.sample((1000,))
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+
+# Training loop
+optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
+
+for x in dataloader:
+    optimizer.zero_grad()
+    loss = -flow(context).log_prob(x).mean()
+    loss.backward()
+    optimizer.step()
+```
+
+## Common Parameters
+
+Most flows share these parameters:
+
+<ParamField path="features" type="int" required>
+  The number of features in the data.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional flows.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of transformation layers to stack.
+</ParamField>
+
+<ParamField path="hidden_features" type="List[int]" default="[64, 64]">
+  The sizes of hidden layers in the neural networks.
+</ParamField>
+
+## Methods
+
+All flows provide these key methods:
+
+### `forward(c=None)`
+
+Returns a PyTorch distribution object.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `Distribution`: A PyTorch distribution with `sample()` and `log_prob()` methods
+
+### `sample()`
+
+Sample from the flow via the returned distribution:
+
+```python
+dist = flow(context)
+samples = dist.sample((n_samples,))
+```
+
+### `log_prob()`
+
+Compute log probability of samples:
+
+```python
+dist = flow(context)
+log_p = dist.log_prob(samples)
+```
+
+## Choosing a Flow
+
+### For General-Purpose Density Estimation
+- **NSF**: Best overall performance, smooth transformations
+- **MAF**: Fast training, good baseline
+
+### For Fast Sampling
+- **RealNVP**: Parallel inverse computation
+- **NICE**: Simple and fast
+
+### For High-Dimensional Data
+- **NAF/UNAF**: Universal approximation with neural networks
+- **CNF**: Continuous-time dynamics
+
+### For Specialized Data
+- **NCSF**: Circular/periodic features (angles, phases)
+- **BPF**: Bounded domains
+
+### For Interpretability
+- **GMM**: Clear cluster structure
+- **GF**: Element-wise transformations
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Transforms" icon="right-left" href="/api/transforms">
+    Learn about the underlying transformations
+  </Card>
+  <Card title="Examples" icon="code" href="/examples">
+    See flows in action with complete examples
+  </Card>
+</CardGroup>

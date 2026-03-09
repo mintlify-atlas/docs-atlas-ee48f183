@@ -1,0 +1,388 @@
+---
+title: Neural Circular Spline Flow (NCSF)
+description: Normalizing flow for circular and periodic data
+---
+
+## Overview
+
+Neural Circular Spline Flow (NCSF) is designed for circular and periodic data (e.g., angles, phases, directions). It uses circular rational-quadratic splines that respect the periodic boundary conditions.
+
+<Note>
+  NCSF assumes features lie in the half-open interval `[-π, π)`. Make sure to normalize your angular data to this range.
+</Note>
+
+## Reference
+
+**Normalizing Flows on Tori and Spheres** (Rezende et al., 2020)  
+[https://arxiv.org/abs/2002.02428](https://arxiv.org/abs/2002.02428)
+
+## Class Definition
+
+```python
+zuko.flows.NCSF(
+    features: int,
+    context: int = 0,
+    bins: int = 8,
+    transforms: int = 3,
+    randperm: bool = False,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="features" type="int" required>
+  The number of circular/periodic features in the data.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional density estimation.
+</ParamField>
+
+<ParamField path="bins" type="int" default="8">
+  The number of bins K in the circular rational-quadratic spline.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of autoregressive transformations to stack.
+</ParamField>
+
+<ParamField path="randperm" type="bool" default="False">
+  Whether features are randomly permuted between transformations. If `False`, features alternate between ascending and descending order.
+</ParamField>
+
+<ParamField path="**kwargs" type="dict">
+  Additional keyword arguments passed to `MaskedAutoregressiveTransform`:
+  - `hidden_features`: Hidden layer sizes (default: `[64, 64]`)
+  - `activation`: Activation function (default: `ReLU`)
+  - `passes`: Number of passes for coupling
+</ParamField>
+
+## Usage Example
+
+```python
+import torch
+import zuko
+import math
+
+# Create an unconditional NCSF
+flow = zuko.flows.NCSF(
+    features=3,  # 3 angles
+    bins=16,
+    transforms=5,
+    hidden_features=[128, 128]
+)
+
+# Sample from the flow (returns values in [-π, π))
+dist = flow()
+samples = dist.sample((1000,))
+print(samples.shape)  # torch.Size([1000, 3])
+print(samples.min(), samples.max())  # Within [-π, π)
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+```
+
+### Angular Data
+
+```python
+import numpy as np
+
+# Example: Wind directions in degrees
+wind_directions = np.array([0, 90, 180, 270, 350])  # degrees
+
+# Convert to radians in [-π, π)
+angles = np.radians(wind_directions)
+angles = np.where(angles > np.pi, angles - 2*np.pi, angles)
+
+x = torch.tensor(angles, dtype=torch.float32)
+
+# Create and train NCSF
+flow = zuko.flows.NCSF(features=1, bins=12)
+optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
+
+for epoch in range(1000):
+    optimizer.zero_grad()
+    loss = -flow().log_prob(x).mean()
+    loss.backward()
+    optimizer.step()
+```
+
+### Conditional Flow
+
+```python
+# Predict phase based on features
+flow = zuko.flows.NCSF(
+    features=2,      # 2 phase angles
+    context=5,       # 5 conditioning features
+    bins=16,
+    transforms=5
+)
+
+context = torch.randn(5)
+dist = flow(context)
+phases = dist.sample((100,))
+```
+
+### Training Example
+
+```python
+import torch.optim as optim
+
+# Create flow for directional data
+flow = zuko.flows.NCSF(
+    features=2,  # 2D directions (e.g., wind)
+    bins=12,
+    transforms=5,
+    hidden_features=[256, 256]
+)
+
+optimizer = optim.Adam(flow.parameters(), lr=1e-3)
+
+for epoch in range(100):
+    for angles in dataloader:  # angles in [-π, π)
+        optimizer.zero_grad()
+        loss = -flow().log_prob(angles).mean()
+        loss.backward()
+        optimizer.step()
+```
+
+## Methods
+
+### `forward(c=None)`
+
+Returns a normalizing flow distribution over circular data.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `NormalizingFlow`: A distribution with:
+  - `sample(shape)`: Sample from the distribution (returns values in `[-π, π)`)
+  - `log_prob(x)`: Compute log probability of samples
+  - `rsample(shape)`: Reparameterized sampling
+
+## When to Use NCSF
+
+<Check>**Good for:**</Check>
+
+- Angular data (directions, orientations, phases)
+- Periodic time series (hourly, daily, seasonal)
+- Rotational data (joints, rotations)
+- Any data with periodic boundary conditions
+- Torus and sphere modeling
+
+<Warning>**Use NSF instead if:**</Warning>
+
+- Your data is not periodic
+- You have mixed periodic and non-periodic features
+- Your data is already normalized to `[-5, 5]`
+
+## Tips
+
+1. **Normalize to [-π, π)**: Always convert your angular data to radians in the range `[-π, π)`.
+
+2. **More bins for complex distributions**: Use 12-16 bins for multimodal angular distributions.
+
+3. **Respect periodicity**: Remember that `-π` and `π` are the same point on the circle.
+
+4. **Visualization**: Use polar plots to visualize circular distributions.
+
+## Architecture Details
+
+NCSF is built on MAF with circular spline transformations:
+
+- **Base distribution**: Box uniform over `[-π - ε, π + ε]` (slightly extended for numerical stability)
+- **Transformation**: Circular domain shifts + monotonic RQS
+- **Spline domain**: `[-π, π)` with periodic boundary
+- **Neural network**: Masked MLP for autoregressive structure
+
+Each transformation composes:
+```python
+# Circular shift
+y_shifted = CircularShift(x, φ)  # φ ∈ [-π, π)
+
+# Monotonic spline on circular domain
+y = MonotonicRQS(y_shifted)  # Respects periodicity
+```
+
+## Circular Splines
+
+Circular splines differ from regular splines:
+
+- **Domain**: `[-π, π)` instead of `[-5, 5]`
+- **Periodicity**: Transformation wraps around at boundaries
+- **Derivative matching**: Derivatives match at `-π` and `π`
+- **Shift**: Includes circular domain shift for flexibility
+
+## Data Preprocessing
+
+### Converting Angles
+
+```python
+import numpy as np
+import torch
+
+def degrees_to_ncsf(degrees):
+    """Convert degrees to NCSF format."""
+    radians = np.radians(degrees)
+    # Wrap to [-π, π)
+    radians = np.arctan2(np.sin(radians), np.cos(radians))
+    return torch.tensor(radians, dtype=torch.float32)
+
+def ncsf_to_degrees(radians):
+    """Convert NCSF format to degrees."""
+    degrees = np.degrees(radians.numpy())
+    # Wrap to [0, 360)
+    degrees = degrees % 360
+    return degrees
+
+# Example
+angles_deg = np.array([0, 90, 180, 270, 350])
+x = degrees_to_ncsf(angles_deg)
+flow = zuko.flows.NCSF(features=1)
+# ... train ...
+samples = flow().sample((100,))
+samples_deg = ncsf_to_degrees(samples)
+```
+
+### Time of Day
+
+```python
+# Convert time of day to circular features
+hours = np.array([0, 6, 12, 18, 23])
+
+# Convert to angle in [-π, π)
+angles = 2 * np.pi * (hours / 24) - np.pi
+x = torch.tensor(angles, dtype=torch.float32)
+
+flow = zuko.flows.NCSF(features=1, bins=24)
+```
+
+## Advanced Usage
+
+### Mixed Periodic and Non-Periodic Features
+
+```python
+# Separate periodic and non-periodic features
+from zuko.flows import NCSF, NSF
+import torch.nn as nn
+
+class MixedFlow(nn.Module):
+    def __init__(self, circular_features, euclidean_features):
+        super().__init__()
+        self.circular_flow = NCSF(circular_features, bins=12)
+        self.euclidean_flow = NSF(euclidean_features, bins=8)
+    
+    def forward(self, x_circular, x_euclidean):
+        log_prob_circular = self.circular_flow().log_prob(x_circular)
+        log_prob_euclidean = self.euclidean_flow().log_prob(x_euclidean)
+        return log_prob_circular + log_prob_euclidean
+
+# Use for data with both types
+flow = MixedFlow(circular_features=2, euclidean_features=5)
+```
+
+### Torus Modeling
+
+```python
+# Model data on a torus (2D angles)
+flow = zuko.flows.NCSF(
+    features=2,  # (θ, φ) on torus
+    bins=16,
+    transforms=7,
+    hidden_features=[256, 256]
+)
+
+# Sample from torus
+samples = flow().sample((1000,))
+theta = samples[:, 0]  # First angle
+phi = samples[:, 1]    # Second angle
+
+# Visualize in 3D
+R, r = 2, 1  # Major and minor radius
+x = (R + r * torch.cos(theta)) * torch.cos(phi)
+y = (R + r * torch.cos(theta)) * torch.sin(phi)
+z = r * torch.sin(theta)
+```
+
+## Visualization
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Train NCSF on angular data
+flow = zuko.flows.NCSF(features=1, bins=16)
+# ... training ...
+
+# Sample and visualize
+samples = flow().sample((1000,)).numpy()
+
+# Histogram
+plt.figure(figsize=(10, 4))
+plt.subplot(1, 2, 1)
+plt.hist(samples, bins=50, density=True)
+plt.xlabel('Angle (radians)')
+plt.ylabel('Density')
+plt.title('Linear histogram')
+
+# Polar plot
+plt.subplot(1, 2, 2, projection='polar')
+plt.hist(samples, bins=50, density=True)
+plt.title('Polar histogram')
+plt.show()
+```
+
+## Applications
+
+### Wind Direction Modeling
+
+```python
+# Model wind directions with context (temperature, pressure)
+flow = zuko.flows.NCSF(
+    features=1,      # Wind direction
+    context=3,       # Temperature, pressure, humidity
+    bins=16,
+    transforms=5
+)
+```
+
+### Protein Dihedral Angles
+
+```python
+# Model protein backbone angles (φ, ψ, ω)
+flow = zuko.flows.NCSF(
+    features=3,  # 3 dihedral angles per residue
+    bins=12,
+    transforms=7
+)
+```
+
+### Periodic Time Series
+
+```python
+# Model seasonal patterns
+flow = zuko.flows.NCSF(
+    features=1,      # Phase in yearly cycle
+    context=10,      # Other time series features
+    bins=12,         # One per month
+    transforms=5
+)
+```
+
+## Comparison with NSF
+
+| Property | NCSF | NSF |
+|----------|------|-----|
+| Domain | `[-π, π)` | `[-5, 5]` |
+| Periodicity | Yes | No |
+| Base distribution | Box uniform | Gaussian |
+| Use case | Circular data | Euclidean data |
+| Boundary behavior | Wraps around | Clamps |
+
+## Related
+
+- [NSF](/api/flows/nsf) - For non-periodic data
+- [CircularShiftTransform](/api/transforms/misc) - Circular domain shifts
+- [MonotonicRQSTransform](/api/transforms/spline) - Spline transformations

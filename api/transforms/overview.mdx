@@ -1,0 +1,136 @@
+---
+title: Transforms
+description: Parameterizable transformations for normalizing flows
+---
+
+The `zuko.transforms` module provides a collection of parameterizable transformations that serve as the building blocks for normalizing flows. All transforms are compatible with PyTorch's distribution framework.
+
+## Overview
+
+Transforms in Zuko are bijective mappings that can compute:
+- Forward transformation: `y = f(x)`
+- Inverse transformation: `x = f^{-1}(y)`
+- Log absolute determinant of the Jacobian: `log |det J_f(x)|`
+
+All transforms inherit from `torch.distributions.Transform` and can be composed, inverted, and combined with distributions.
+
+## Transform Categories
+
+### Autoregressive Transforms
+
+Transforms that apply autoregressive conditioning, where each output dimension depends on previous dimensions.
+
+- [AutoregressiveTransform](/api/transforms/autoregressive) - Autoregressive transformation scheme
+
+### Coupling Transforms
+
+Transforms that split inputs and apply transformations to subsets conditioned on others.
+
+- [CouplingTransform](/api/transforms/coupling) - Coupling transformation scheme
+
+### Spline Transforms
+
+Monotonic spline-based transformations for flexible, continuous mappings.
+
+- [MonotonicRQSTransform](/api/transforms/spline) - Rational quadratic spline transformation
+
+### Polynomial Transforms
+
+Transformations based on polynomial functions.
+
+- [SOSPolynomialTransform](/api/transforms/polynomial) - Sum-of-squares polynomial transformation
+- [BernsteinTransform](/api/transforms/polynomial) - Bernstein polynomial transformation
+- [BoundedBernsteinTransform](/api/transforms/polynomial) - Bounded Bernstein polynomial transformation
+
+### Neural Transforms
+
+Transforms constructed from neural networks and learned functions.
+
+- [UnconstrainedMonotonicTransform](/api/transforms/neural) - Monotonic transformation via integration
+- [MonotonicTransform](/api/transforms/neural) - General monotonic transformation wrapper
+- [GaussianizationTransform](/api/transforms/neural) - Gaussianization via learned CDFs
+- [FreeFormJacobianTransform](/api/transforms/neural) - Free-form Jacobian transformation (FFJORD)
+
+### Utility Transforms
+
+Basic transformations for common operations.
+
+- [IdentityTransform](/api/transforms/misc) - Identity transformation
+- [AdditiveTransform](/api/transforms/misc) - Translation transformation
+- [MonotonicAffineTransform](/api/transforms/misc) - Affine transformation with positive scale
+- [RotationTransform](/api/transforms/misc) - Orthogonal rotation transformation
+- [PermutationTransform](/api/transforms/misc) - Permutation transformation
+- [LULinearTransform](/api/transforms/misc) - LU decomposition linear transformation
+- [CircularShiftTransform](/api/transforms/misc) - Circular shift on bounded interval
+- [CosTransform](/api/transforms/misc) - Cosine transformation
+- [SinTransform](/api/transforms/misc) - Sine transformation
+- [SignedPowerTransform](/api/transforms/misc) - Signed power transformation
+- [SoftclipTransform](/api/transforms/misc) - Soft clipping to bounded interval
+
+### Composition Transforms
+
+Transforms for combining and modifying other transforms.
+
+- [ComposedTransform](/api/transforms/misc) - Composition of multiple transforms
+- [DependentTransform](/api/transforms/misc) - Treats dimensions as dependent
+
+## Basic Usage
+
+```python
+import torch
+import zuko
+
+# Create a simple affine transformation
+shift = torch.tensor([1.0, 2.0])
+scale = torch.tensor([0.5, 0.5])
+transform = zuko.transforms.MonotonicAffineTransform(shift, scale)
+
+# Forward transformation
+x = torch.randn(10, 2)
+y = transform(x)
+
+# Inverse transformation
+x_reconstructed = transform.inv(y)
+
+# Log determinant of Jacobian
+ladj = transform.log_abs_det_jacobian(x, y)
+```
+
+## Composing Transforms
+
+```python
+import torch
+import zuko
+
+# Create multiple transforms
+t1 = zuko.transforms.AdditiveTransform(torch.tensor([1.0, 0.0]))
+t2 = zuko.transforms.PermutationTransform(torch.tensor([1, 0]))
+t3 = zuko.transforms.MonotonicAffineTransform(
+    torch.tensor([0.0, 0.0]),
+    torch.tensor([1.0, 1.0])
+)
+
+# Compose transforms
+transform = zuko.transforms.ComposedTransform(t1, t2, t3)
+
+# Use the composed transformation
+x = torch.randn(10, 2)
+y = transform(x)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Autoregressive" icon="arrow-right" href="/api/transforms/autoregressive">
+    Learn about autoregressive transformations
+  </Card>
+  <Card title="Coupling" icon="link" href="/api/transforms/coupling">
+    Explore coupling transformations
+  </Card>
+  <Card title="Spline" icon="chart-line" href="/api/transforms/spline">
+    Discover spline-based transformations
+  </Card>
+  <Card title="Polynomial" icon="function" href="/api/transforms/polynomial">
+    Work with polynomial transformations
+  </Card>
+</CardGroup>

@@ -1,0 +1,289 @@
+---
+title: Neural Autoregressive Flow (NAF)
+description: Autoregressive flow with monotonic neural networks
+---
+
+## Overview
+
+Neural Autoregressive Flow (NAF) uses monotonic neural networks (MNN) to create universal function approximators for autoregressive transformations. Unlike MAF which uses simple affine transformations, NAF can represent arbitrary monotonic functions.
+
+<Warning>
+  Invertibility is only guaranteed for features within the interval `[-10, 10]`. It is recommended to standardize features (zero mean, unit variance) before training.
+</Warning>
+
+## Reference
+
+**Neural Autoregressive Flows** (Huang et al., 2018)  
+[https://arxiv.org/abs/1804.00779](https://arxiv.org/abs/1804.00779)
+
+## Class Definition
+
+```python
+zuko.flows.NAF(
+    features: int,
+    context: int = 0,
+    transforms: int = 3,
+    randperm: bool = False,
+    signal: int = 16,
+    network: dict = {},
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="features" type="int" required>
+  The number of features in the data.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional density estimation.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of autoregressive transformations to stack.
+</ParamField>
+
+<ParamField path="randperm" type="bool" default="False">
+  Whether features are randomly permuted between transformations. If `False`, features alternate between ascending and descending order.
+</ParamField>
+
+<ParamField path="signal" type="int" default="16">
+  The number of signal features for the monotonic neural network. Higher values increase expressivity but add computational cost.
+</ParamField>
+
+<ParamField path="network" type="dict" default="{}">
+  Keyword arguments passed to the `MNN` (monotonic neural network) constructor:
+  - `hidden_features`: Hidden layer sizes for the monotonic network
+  - `activation`: Activation function
+</ParamField>
+
+<ParamField path="**kwargs" type="dict">
+  Additional keyword arguments passed to `MaskedAutoregressiveTransform`:
+  - `hidden_features`: Hidden layer sizes for the autoregressive network
+  - `activation`: Activation function
+</ParamField>
+
+## Usage Example
+
+```python
+import torch
+import zuko
+
+# Create an unconditional NAF
+flow = zuko.flows.NAF(
+    features=5,
+    transforms=5,
+    signal=32,
+    hidden_features=[128, 128]
+)
+
+# Sample from the flow
+dist = flow()
+samples = dist.sample((1000,))
+print(samples.shape)  # torch.Size([1000, 5])
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+print(log_prob.shape)  # torch.Size([1000])
+```
+
+### Conditional Flow
+
+```python
+# Create a conditional NAF
+flow = zuko.flows.NAF(
+    features=3,
+    context=5,
+    transforms=5,
+    signal=24
+)
+
+context = torch.randn(5)
+dist = flow(context)
+samples = dist.sample((100,))
+```
+
+### Training Example
+
+```python
+import torch.optim as optim
+
+# Create flow with custom network configurations
+flow = zuko.flows.NAF(
+    features=10,
+    transforms=5,
+    signal=32,
+    hidden_features=[256, 256],  # Autoregressive network
+    network={'hidden_features': [64, 64, 64]}  # Monotonic network
+)
+
+optimizer = optim.Adam(flow.parameters(), lr=1e-3)
+
+for epoch in range(100):
+    for x in dataloader:
+        optimizer.zero_grad()
+        
+        # Ensure data is in [-10, 10]
+        x = torch.clamp(x, -10, 10)
+        
+        loss = -flow().log_prob(x).mean()
+        loss.backward()
+        optimizer.step()
+    
+    print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
+```
+
+## Methods
+
+### `forward(c=None)`
+
+Returns a normalizing flow distribution.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `NormalizingFlow`: A distribution with:
+  - `sample(shape)`: Sample from the distribution
+  - `log_prob(x)`: Compute log probability of samples
+  - `rsample(shape)`: Reparameterized sampling
+
+## When to Use NAF
+
+<Check>**Good for:**</Check>
+
+- Complex, highly nonlinear distributions
+- High-dimensional data
+- When you need universal approximation
+- Maximum expressivity in autoregressive flows
+
+<Warning>**Consider alternatives if:**</Warning>
+
+- You need fast sampling (use RealNVP)
+- Your data is outside `[-10, 10]` and can't be standardized
+- You have limited compute (use MAF or NSF)
+- You need smooth, well-behaved transformations (use NSF)
+
+## Tips
+
+1. **Standardize your data**: NAF requires features in `[-10, 10]`. Always normalize to zero mean and unit variance.
+
+2. **Tune signal dimension**: Start with `signal=16`. Increase to 32 or 64 for more complex data.
+
+3. **Use softclip**: NAF automatically includes `SoftclipTransform` layers between transformations to keep values bounded.
+
+4. **Balance network sizes**: The autoregressive network (`hidden_features`) predicts signals, while the monotonic network (`network['hidden_features']`) performs transformations.
+
+## Architecture Details
+
+NAF consists of:
+
+- **Base distribution**: Diagonal Gaussian `N(0, I)`
+- **Transformation**: Monotonic neural networks with autoregressive structure
+- **Signal network**: Masked MLP predicts signal vectors autoregressively
+- **Monotonic network**: MLP with positive weights computes transformations
+- **Softclip layers**: Inserted between transformations to maintain bounds
+
+Each transformation:
+```python
+y_i = MNN(x_i; signal_i(x_1, ..., x_{i-1}, c))
+```
+where `MNN` is a monotonic neural network and `signal_i` is predicted autoregressively.
+
+## Monotonic Neural Networks
+
+The key innovation in NAF is the use of monotonic neural networks:
+
+- **Positive weights**: All weights in the network are positive, ensuring monotonicity
+- **Flexible**: Can approximate any continuous monotonic function
+- **Signal-based**: Behavior is modulated by signal vectors rather than changing weights
+
+```python
+# Simplified monotonic network
+class MNN(nn.Module):
+    def __init__(self, signal_dim):
+        # All layers have positive weights
+        self.layers = MonotonicMLP(1 + signal_dim, 1)
+    
+    def forward(self, x, signal):
+        # Concatenate input with signal
+        inp = torch.cat([x, signal], dim=-1)
+        return self.layers(inp)
+```
+
+## NAF vs Other Flows
+
+| Property | NAF | MAF | NSF |
+|----------|-----|-----|-----|
+| Transformation | Neural network | Affine | Spline |
+| Expressivity | Very high | Medium | High |
+| Training speed | Slow | Fast | Medium |
+| Sampling speed | Slow | Slow | Slow |
+| Memory usage | High | Low | Medium |
+| Domain | `[-10, 10]` | Unbounded | `[-5, 5]` |
+
+## Advanced Usage
+
+### Custom Monotonic Network
+
+```python
+flow = zuko.flows.NAF(
+    features=10,
+    transforms=5,
+    signal=24,
+    network={
+        'hidden_features': [128, 128, 128],
+        'activation': nn.ELU  # Different activation
+    }
+)
+```
+
+### High-Dimensional Data
+
+```python
+# For high dimensions, use coupling
+flow = zuko.flows.NAF(
+    features=100,
+    transforms=3,
+    passes=2,  # Coupling instead of fully autoregressive
+    signal=32
+)
+```
+
+### Fine-Grained Control
+
+```python
+from zuko.flows.autoregressive import MaskedAutoregressiveTransform
+from zuko.flows.neural import MNN
+
+# Manually construct NAF-like flow
+transform = MaskedAutoregressiveTransform(
+    features=10,
+    context=5,
+    univariate=MNN(signal=32, hidden_features=[64, 64, 64]),
+    shapes=[(32,)],  # Signal shape
+    hidden_features=[256, 256]
+)
+```
+
+## Computational Considerations
+
+NAF is computationally expensive:
+
+- **Parameters**: More than MAF due to monotonic networks
+- **Forward pass**: Slower due to neural network evaluations
+- **Memory**: Higher due to signal vectors and network activations
+
+**Optimization strategies**:
+1. Use smaller signal dimensions (8-16)
+2. Use coupling (`passes=2`) for high dimensions
+3. Reduce monotonic network depth
+4. Use mixed precision training
+
+## Related
+
+- [UNAF](/api/flows/unaf) - Unconstrained variant with integration
+- [MAF](/api/flows/maf) - Simpler affine alternative
+- [NSF](/api/flows/nsf) - Spline-based alternative
+- [MonotonicTransform](/api/transforms/neural) - The underlying transformation

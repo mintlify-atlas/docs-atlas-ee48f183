@@ -1,0 +1,337 @@
+---
+title: Learn the Basics
+description: Introduction to PyTorch/Zuko distributions, transformations, and normalizing flows
+---
+
+This tutorial walks you through:
+
+<Steps>
+  <Step title="Distributions and Transformations">
+    Understanding PyTorch/Zuko distributions and transformations
+  </Step>
+  <Step title="Parametrization">
+    How to parametrize probabilistic models
+  </Step>
+  <Step title="Pre-built Flows">
+    How to instantiate pre-built normalizing flows
+  </Step>
+  <Step title="Custom Architectures">
+    How to create custom flow architectures
+  </Step>
+</Steps>
+
+<Note>
+Training is covered in subsequent tutorials.
+</Note>
+
+## Setup
+
+First, let's import the required libraries:
+
+```python
+import torch
+
+import zuko
+
+_ = torch.random.manual_seed(0)
+```
+
+## Distributions and Transformations
+
+PyTorch defines two components for probabilistic modeling: the `Distribution` and the `Transform`. A distribution object represents the probability distribution $p(X)$ of a random variable $X$. A distribution must implement the `sample` and `log_prob` methods, meaning that we can draw realizations $x \sim p(X)$ from the distribution and evaluate the log-likelihood $\log p(X = x)$ of realizations.
+
+```python
+distribution = torch.distributions.Normal(torch.tensor(0.0), torch.tensor(1.0))
+
+x = distribution.sample()  # x ~ p(X)
+log_p = distribution.log_prob(x)  # log p(X = x)
+
+x, log_p
+```
+
+**Output:**
+```
+(tensor(1.5410), tensor(-2.1063))
+```
+
+A transform object represents a bijective transformation $f: X \mapsto Y$ from a domain to a co-domain. A transformation must implement a forward call $y = f(x)$, an inverse call $x = f^{-1}(y)$ and the `log_abs_det_jacobian` method to compute the log-absolute-determinant of the transformation's Jacobian $\log \left| \det \frac{\partial f(x)}{\partial x} \right|$.
+
+```python
+transform = torch.distributions.AffineTransform(torch.tensor(2.0), torch.tensor(3.0))
+
+y = transform(x)  # f(x)
+xx = transform.inv(y)  # f^{-1}(f(x))
+ladj = transform.log_abs_det_jacobian(x, y)  # log |det df(x)/dx|
+
+y, xx, ladj
+```
+
+**Output:**
+```
+(tensor(6.6230), tensor(1.5410), tensor(1.0986))
+```
+
+### Normalizing Flows
+
+Combining a base distribution $p(Z)$ and a transformation $f: X \mapsto Z$ defines a new distribution $p(X)$. The likelihood is given by the change of random variables formula:
+
+$$ p(X = x) = p(Z = f(x)) \left| \det \frac{\partial f(x)}{\partial x} \right| $$
+
+Sampling from $p(X)$ can be performed by first drawing realizations $z \sim p(Z)$ and then applying the inverse transformation $x = f^{-1}(z)$. Such combination of a base distribution and a bijective transformation is sometimes called a *normalizing flow*. The term *normalizing* refers to the fact that the base distribution is often a (standard) *normal* distribution.
+
+```python
+flow = zuko.distributions.NormalizingFlow(transform, distribution)
+
+x = flow.sample()
+log_p = flow.log_prob(x)
+
+x, log_p
+```
+
+**Output:**
+```
+(tensor(-0.7645), tensor(0.1366))
+```
+
+## Parametrization
+
+When designing the distributions module, the PyTorch team decided that distributions and transformations should be lightweight objects that are used as part of computations but destroyed afterwards. Consequently, the `Distribution` and `Transform` classes are not sub-classes of `torch.nn.Module`, which means that we cannot retrieve their parameters with `.parameters()`, send their internal tensor to GPU with `.cuda()` or train them as regular neural networks. In addition, the concepts of conditional distribution and transformation, which are essential for probabilistic inference, are impossible to express with the current interface.
+
+To solve these problems, `zuko` defines two concepts: the `LazyDistribution` and the `LazyTransform`, which are modules whose forward pass returns a distribution or transformation, respectively. These components hold the parameters of the distributions/transformations as well as the recipe to build them. This way, the actual distribution/transformation objects are lazily constructed and destroyed when necessary. Importantly, because the creation of the distribution/transformation object is delayed, an eventual condition can be easily taken into account. This design enables lazy distributions to act like distributions while retaining features inherent to modules, such as trainable parameters.
+
+### Variational Inference
+
+Let's say we have a dataset of pairs $(x, c) \sim p(X, C)$ and want to model the distribution of $X$ given $c$, that is $p(X | c)$. The goal of variational inference is to find the model $q_{\phi^\star}(X | c)$ that is most similar to $p(X | c)$ among a family of (conditional) distributions $q_\phi(X | c)$ distinguished by their parameters $\phi$. Expressing the dissimilarity between two distributions as their Kullback-Leibler (KL) divergence, the variational inference objective becomes:
+
+$$
+    \begin{align}
+        \phi^* = \arg \min_\phi & ~ \mathrm{KL} \big( p(x, c) || q_\phi(x | c) \, p(c) \big) \\
+        = \arg \min_\phi & ~ \mathbb{E}_{p(x, c)} \left[ \log \frac{p(x, c)}{q_\phi(x | c) \, p(c)} \right] \\
+        = \arg \min_\phi & ~ \mathbb{E}_{p(x, c)} \big[ -\log q_\phi(x | c) \big]
+    \end{align}
+$$
+
+For example, let $X$ be a standard Gaussian variable and $C$ be a vector of three unit Gaussian variables $C_i$ centered at $X$.
+
+```python
+x = torch.distributions.Normal(0, 1).sample((1024,))
+c = torch.distributions.Normal(x, 1).sample((3,)).T
+
+for i in range(3):
+    print(x[i], c[i])
+```
+
+**Output:**
+```
+tensor(0.8487) tensor([ 1.5090,  0.4078, -0.7343])
+tensor(0.6920) tensor([-0.7201,  0.3694,  0.7853])
+tensor(-0.3160) tensor([ 1.5186, -1.3096, -1.0278])
+```
+
+We choose a Gaussian model of the form $\mathcal{N}(x | \mu_\phi(c), \sigma_\phi^2(c))$ as our distribution family, which we implement as a `LazyDistribution`.
+
+```python
+class GaussianModel(zuko.lazy.LazyDistribution):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.hyper = torch.nn.Sequential(
+            torch.nn.Linear(3, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 2),  # mu, log(sigma)
+        )
+
+    def forward(self, c: torch.Tensor) -> torch.distributions.Normal:
+        mu, log_sigma = self.hyper(c).unbind(dim=-1)
+
+        return torch.distributions.Normal(mu, log_sigma.exp())
+
+
+model = GaussianModel()
+model
+```
+
+Calling the forward method of the model with a context $c$ returns a distribution object, which we can use to draw realizations or evaluate the likelihood of realizations. In the code below, `model(c=c[0])` calls the `forward` method as implemented above.
+
+```python
+distribution = model(c=c[0])
+distribution
+```
+
+**Output:**
+```
+Normal(loc: -0.022776737809181213, scale: 1.183609962463379)
+```
+
+```python
+distribution.sample()
+```
+
+**Output:**
+```
+tensor(0.1218)
+```
+
+```python
+distribution.log_prob(x[0])
+```
+
+**Output:**
+```
+tensor(-1.3586, grad_fn=<SubBackward0>)
+```
+
+The result of `log_prob` is part of a computation graph (it has a `grad_fn`) and therefore it can be used to train the parameters of the model by variational inference. Importantly, when the parameters of the model are modified, for example due to a gradient descent step, you must remember to call the forward method again to re-build the distribution with the new parameters.
+
+```python
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+for _ in range(64):
+    loss = -model(c).log_prob(x).mean()  # E[-log q(x | c)]
+    loss.backward()
+
+    optimizer.step()
+    optimizer.zero_grad()
+```
+
+## Normalizing Flows
+
+Following the same spirit, a parametric normalizing flow in Zuko is a special `LazyDistribution` that contains a `LazyTransform` and a base `LazyDistribution`. To increase expressivity, the transformation is usually the composition of a sequence of "simple" transformations:
+
+$$ f(x) = f_n \circ \dots \circ f_2 \circ f_1(x) $$
+
+For which we can compute the determinant of the Jacobian as:
+
+$$ \mathrm{det} \frac{\partial f(x)}{\partial x} = \prod_{i = 1}^{n} \mathrm{det} \frac{\partial f_i(x_{i-1})}{\partial x_{i-1}} $$
+
+Where $x_{0} = x$ and $x_i = f_i(x_{i-1})$. In the univariate case, finding a bijective transformation whose determinant of the Jacobian is tractable is easy: any differentiable monotonic function works. In the multivariate case, the most common way to make the determinant easy to compute is to enforce a triangular Jacobian. This is achieved by a transformation $y = f(x)$ where each element $y_i$ is a monotonic function of $x_i$, conditioned on the preceding elements $x_{<i}$.
+
+$$ y_i = f(x_i | x_{<i}) $$
+
+Autoregressive and coupling transformations are notable examples of this class of transformations.
+
+```python
+transform = zuko.flows.MaskedAutoregressiveTransform(
+    features=5,
+    context=0,                                         # no context
+    univariate=zuko.transforms.MonotonicRQSTransform,  # rational-quadratic spline
+    shapes=([8], [8], [7]),                            # shapes of the spline parameters (8 bins)
+    hidden_features=(64, 128, 256),                    # size of the hyper-network
+)  # fmt: skip
+
+transform
+```
+
+```python
+f = transform()
+x = torch.randn(5)
+y = f(x)
+xx = f.inv(y)
+
+print(x, xx, sep="\n")
+```
+
+**Output:**
+```
+tensor([-0.6486, -0.5537,  0.1521, -1.0606,  0.6246])
+tensor([-0.6486, -0.5537,  0.1521, -1.0606,  0.6246], grad_fn=<WhereBackward0>)
+```
+
+Let's check the Jacobian:
+
+```python
+torch.autograd.functional.jacobian(f, x).round(decimals=3)
+```
+
+**Output:**
+```
+tensor([[ 9.9700e-01,  0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00],
+        [ 2.0000e-03,  1.0900e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00],
+        [-1.9000e-02, -7.0000e-03,  1.0540e+00,  0.0000e+00,  0.0000e+00],
+        [-5.0000e-03, -1.0000e-03,  3.0000e-03,  1.0240e+00,  0.0000e+00],
+        [ 1.6000e-02, -1.8000e-02, -1.0000e-03,  2.0000e-03,  8.8100e-01]])
+```
+
+We can see that the Jacobian of the autoregressive transformation is indeed triangular.
+
+### Pre-built Architecture
+
+Zuko provides many pre-built flow architectures including `NICE`, `MAF`, `NSF`, `CNF` and many others. We recommend users to try `MAF` and `NSF` first as they are efficient baselines. In the following cell, we instantiate a conditional flow (5 sample features and 8 context features) with 3 affine autoregressive transformations.
+
+```python
+flow = zuko.flows.MAF(features=5, context=8, transforms=3)
+flow
+```
+
+### Custom Architecture
+
+Alternatively, a flow can be built as a custom `Flow` object given a sequence of lazy transformations and a base lazy distribution. The following demonstrates a condensed example of many things that are possible in Zuko. But remember, with great power comes great responsibility (and great bugs).
+
+```python
+from zuko.distributions import BoxUniform
+from zuko.flows import (
+    GeneralCouplingTransform,
+    MaskedAutoregressiveTransform,
+)
+from zuko.lazy import (
+    Flow,
+    UnconditionalDistribution,
+    UnconditionalTransform,
+)
+from zuko.transforms import (
+    AffineTransform,
+    MonotonicRQSTransform,
+    RotationTransform,
+    SigmoidTransform,
+)
+
+flow = Flow(
+    transform=[
+        UnconditionalTransform(     # [0, 255] to ]0, 1[
+            AffineTransform,        # y = loc + scale * x
+            torch.tensor(1 / 512),  # loc
+            torch.tensor(1 / 256),  # scale
+            buffer=True,            # not trainable
+        ),
+        UnconditionalTransform(lambda: SigmoidTransform().inv),  # y = logit(x)
+        MaskedAutoregressiveTransform(  # autoregressive transform (affine by default)
+            features=5,
+            context=8,
+            passes=5,  # fully-autoregressive
+        ),
+        UnconditionalTransform(RotationTransform, torch.randn(5, 5)),  # trainable rotation
+        GeneralCouplingTransform(  # coupling transform
+            features=5,
+            context=8,
+            univariate=MonotonicRQSTransform,  # rational-quadratic spline
+            shapes=([8], [8], [7]),            # shapes of the spline parameters (8 bins)
+            hidden_features=(256, 256),        # size of the hyper-network
+            activation=torch.nn.ELU,           # ELU activation in hyper-network
+        ).inv,  # inverse
+    ],
+    base=UnconditionalDistribution(  # ignore context
+        BoxUniform,
+        torch.full([5], -3.0),  # lower bound
+        torch.full([5], +3.0),  # upper bound
+        buffer=True,            # not trainable
+    ),
+)  # fmt: skip
+
+flow
+```
+
+## References
+
+1. Masked Autoregressive Flow for Density Estimation (Papamakarios et al., 2017) \
+   [https://arxiv.org/abs/1705.07057](https://arxiv.org/abs/1705.07057)
+
+2. NICE: Non-linear Independent Components Estimation (Dinh et al., 2014) \
+   [https://arxiv.org/abs/1410.8516](https://arxiv.org/abs/1410.8516)
+
+3. Neural Spline Flows (Durkan et al., 2019) \
+   [https://arxiv.org/abs/1906.04032](https://arxiv.org/abs/1906.04032)
+
+4. Neural Ordinary Differential Equations (Chen et al., 2018) \
+   [https://arxiv.org/abs/1806.07366](https://arxiv.org/abs/1806.07366)

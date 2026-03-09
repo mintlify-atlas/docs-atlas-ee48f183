@@ -1,0 +1,197 @@
+---
+title: Installation
+description: Install Zuko and get started with normalizing flows in PyTorch
+---
+
+## Requirements
+
+Zuko requires:
+- **Python**: 3.10 or higher
+- **PyTorch**: 1.12.0 or higher
+- **NumPy**: 1.20.0 or higher
+
+<Note>
+Zuko is built on top of PyTorch and leverages its distribution and transformation primitives. Make sure you have PyTorch installed before installing Zuko.
+</Note>
+
+## Installation Methods
+
+<Steps>
+  <Step title="Install from PyPI (Recommended)">
+    The easiest way to install Zuko is via pip from [PyPI](https://pypi.org/project/zuko):
+
+    <CodeGroup>
+      ```bash pip
+      pip install zuko
+      ```
+
+      ```bash pip with PyTorch
+      # If you don't have PyTorch installed yet
+      pip install torch zuko
+      ```
+
+      ```bash Upgrade
+      # Upgrade to the latest version
+      pip install --upgrade zuko
+      ```
+    </CodeGroup>
+
+    This will install the latest stable release along with all required dependencies.
+  </Step>
+
+  <Step title="Install from Source (Latest Features)">
+    If you need the latest features that haven't been released yet, install directly from the GitHub repository:
+
+    <CodeGroup>
+      ```bash HTTPS
+      pip install git+https://github.com/probabilists/zuko
+      ```
+
+      ```bash SSH
+      pip install git+ssh://git@github.com/probabilists/zuko.git
+      ```
+
+      ```bash Specific Branch
+      pip install git+https://github.com/probabilists/zuko@branch-name
+      ```
+    </CodeGroup>
+
+    <Note>
+    Installing from source gives you access to the latest development features, but may be less stable than the PyPI release.
+    </Note>
+  </Step>
+
+  <Step title="Development Installation">
+    If you want to contribute to Zuko or modify the source code, clone the repository and install in editable mode:
+
+    ```bash
+    git clone https://github.com/probabilists/zuko.git
+    cd zuko
+    pip install -e .
+    ```
+
+    For development with additional tools:
+
+    ```bash
+    # Install with development dependencies
+    pip install -e ".[dev]"
+    
+    # Or install all optional dependencies
+    pip install -e ".[dev,docs,test]"
+    ```
+  </Step>
+</Steps>
+
+## Verify Installation
+
+After installation, verify that Zuko is installed correctly:
+
+<CodeGroup>
+  ```python Python Script
+  import zuko
+  import torch
+  
+  print(f"Zuko version: {zuko.__version__}")
+  print(f"PyTorch version: {torch.__version__}")
+  
+  # Test basic functionality
+  flow = zuko.flows.NSF(features=2, context=0, transforms=3)
+  print(f"Created flow: {type(flow).__name__}")
+  
+  # Sample from the flow
+  samples = flow().sample((10,))
+  print(f"Generated samples with shape: {samples.shape}")
+  ```
+
+  ```bash Command Line
+  python -c "import zuko; print(f'Zuko {zuko.__version__} installed successfully')"
+  ```
+</CodeGroup>
+
+Expected output:
+```
+Zuko version: 1.5.0
+PyTorch version: 2.x.x
+Created flow: NSF
+Generated samples with shape: torch.Size([10, 2])
+```
+
+## GPU Support
+
+Zuko automatically leverages PyTorch's GPU support. If you have a CUDA-capable GPU, you can move flows to GPU just like any PyTorch module:
+
+```python
+import torch
+import zuko
+
+# Create a flow
+flow = zuko.flows.NSF(features=3, context=5)
+
+# Move to GPU
+if torch.cuda.is_available():
+    flow = flow.to('cuda')
+    print("Flow moved to GPU")
+else:
+    print("No GPU available, using CPU")
+```
+
+## Optional Dependencies
+
+Zuko has several optional dependency groups:
+
+| Group | Install Command | Purpose |
+|-------|----------------|----------|
+| `dev` | `pip install zuko[dev]` | Development tools (pre-commit, ruff, matplotlib) |
+| `docs` | `pip install zuko[docs]` | Documentation building (sphinx, myst-nb) |
+| `test` | `pip install zuko[test]` | Testing framework (pytest) |
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="PyTorch version mismatch">
+    If you encounter issues with PyTorch compatibility:
+    
+    ```bash
+    # Check your PyTorch version
+    python -c "import torch; print(torch.__version__)"
+    
+    # Upgrade PyTorch if needed
+    pip install --upgrade torch
+    ```
+  </Accordion>
+
+  <Accordion title="Import errors after installation">
+    If you can't import Zuko after installation:
+    
+    ```bash
+    # Verify the installation
+    pip show zuko
+    
+    # Reinstall if necessary
+    pip uninstall zuko
+    pip install zuko
+    ```
+  </Accordion>
+
+  <Accordion title="CUDA/GPU issues">
+    If you have problems with GPU acceleration:
+    
+    ```python
+    import torch
+    
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print(f"CUDA version: {torch.version.cuda}")
+    print(f"Device count: {torch.cuda.device_count()}")
+    ```
+    
+    Make sure you have the CUDA-enabled version of PyTorch installed. See [PyTorch installation guide](https://pytorch.org/get-started/locally/) for details.
+  </Accordion>
+</AccordionGroup>
+
+## What's Next?
+
+Now that you have Zuko installed, you're ready to build your first normalizing flow!
+
+<Card title="Quickstart Tutorial" icon="rocket" href="/get-started/quickstart">
+  Learn how to create and train a normalizing flow in just a few minutes
+</Card>

@@ -1,122 +1,129 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Zuko",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#5d6c75",
+    "light": "#b5bec1",
+    "dark": "#f37a65"
   },
-  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "https://media.brand.dev/ef181a03-ad47-4465-bc16-8ba9f94de21e.png",
+    "dark": "https://media.brand.dev/ef181a03-ad47-4465-bc16-8ba9f94de21e.png"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/probabilists/zuko"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/probabilists/zuko"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/normalizing-flows",
+              "concepts/lazy-distributions",
+              "concepts/transformations"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Guides",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/training-flows",
+              "guides/custom-flows",
+              "guides/bayesian-inference",
+              "guides/variational-autoencoders"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Tutorials",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "tutorials/basics",
+              "tutorials/forward-kl",
+              "tutorials/reverse-kl",
+              "tutorials/bayesian-flows",
+              "tutorials/vae"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Flows",
             "pages": [
-              "api-reference/introduction"
+              "api/flows/overview",
+              "api/flows/nsf",
+              "api/flows/maf",
+              "api/flows/realnvp",
+              "api/flows/nice",
+              "api/flows/naf",
+              "api/flows/unaf",
+              "api/flows/cnf",
+              "api/flows/ncsf",
+              "api/flows/sospf",
+              "api/flows/bpf",
+              "api/flows/gf",
+              "api/flows/gmm"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Core Components",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/core/lazy-distributions",
+              "api/core/lazy-transforms",
+              "api/core/flow-class"
+            ]
+          },
+          {
+            "group": "Distributions",
+            "pages": [
+              "api/distributions/overview",
+              "api/distributions/normalizing-flow",
+              "api/distributions/special"
+            ]
+          },
+          {
+            "group": "Transforms",
+            "pages": [
+              "api/transforms/overview",
+              "api/transforms/autoregressive",
+              "api/transforms/coupling",
+              "api/transforms/spline",
+              "api/transforms/polynomial",
+              "api/transforms/neural",
+              "api/transforms/misc"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/nn",
+              "api/utils",
+              "api/bayesian",
+              "api/mixtures"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

@@ -1,0 +1,119 @@
+---
+title: Introduction
+description: Learn about Zuko, a Python package for normalizing flows in PyTorch
+---
+
+## What is Zuko?
+
+Zuko is a Python package that implements **normalizing flows** in [PyTorch](https://pytorch.org). Normalizing flows are a powerful class of generative models that learn complex probability distributions by transforming simple base distributions through a sequence of invertible transformations.
+
+<Note>
+In the [Avatar](https://wikipedia.org/wiki/Avatar:_The_Last_Airbender) cartoon, [Zuko](https://wikipedia.org/wiki/Zuko) is a powerful firebender 🔥
+</Note>
+
+## Why Zuko?
+
+PyTorch provides excellent `Distribution` and `Transform` classes for probabilistic programming. However, these classes have significant limitations when building normalizing flows:
+
+- **Not GPU-compatible**: `Distribution` and `Transform` are not subclasses of `torch.nn.Module`, which means you cannot send their internal tensors to GPU with `.to('cuda')` or retrieve their parameters with `.parameters()`
+- **No conditional distributions**: The concepts of conditional distribution and transformation, which are essential for probabilistic inference, are impossible to express in standard PyTorch
+- **Limited trainability**: Without being modules, these classes cannot easily participate in gradient-based optimization
+
+Zuko solves these problems with an elegant design that makes normalizing flows both powerful and easy to use.
+
+## Core Concepts
+
+### LazyDistribution
+
+A `LazyDistribution` is any `torch.nn.Module` whose forward pass returns a `Distribution`. This design allows the distribution creation to be delayed until a condition is provided.
+
+```python
+from zuko.lazy import LazyDistribution
+from torch.distributions import Distribution
+
+class MyLazyDistribution(LazyDistribution):
+    def forward(self, c=None) -> Distribution:
+        # Create and return a distribution p(X | c)
+        # The context c can influence the distribution parameters
+        return some_distribution
+```
+
+Because the actual distribution creation is delayed, an eventual condition can be easily taken into account. This enables:
+- **Conditional distributions** `p(x | c)` where the distribution parameters depend on context `c`
+- **Trainable parameters** that can be optimized with standard PyTorch optimizers
+- **GPU compatibility** through standard `.to('cuda')` calls
+
+### LazyTransform
+
+Similarly, a `LazyTransform` is any `torch.nn.Module` whose forward pass returns a `Transform`. This allows for conditional transformations where the transformation parameters depend on context.
+
+```python
+from zuko.lazy import LazyTransform
+from torch.distributions import Transform
+
+class MyLazyTransform(LazyTransform):
+    def forward(self, c=None) -> Transform:
+        # Create and return a transformation y = f(x | c)
+        # The context c can influence the transformation parameters
+        return some_transform
+```
+
+### Normalizing Flows
+
+A normalizing flow in Zuko is built by combining:
+1. A sequence of `LazyTransform` objects (the invertible transformations)
+2. A `LazyDistribution` base distribution (typically a simple Gaussian)
+
+When you provide a context `c` to the flow, it returns a conditional distribution `p(x | c)` that can be:
+- **Evaluated**: Compute `log_prob(x)` for density estimation
+- **Sampled**: Generate samples `x ~ p(x | c)`
+- **Optimized**: Train the flow parameters to maximize likelihood
+
+## PyTorch Integration Benefits
+
+By building on PyTorch's ecosystem, Zuko provides:
+
+<CardGroup cols={2}>
+  <Card title="Seamless Training" icon="graduation-cap">
+    Use standard PyTorch optimizers, learning rate schedulers, and training loops
+  </Card>
+  <Card title="GPU Acceleration" icon="microchip">
+    Move flows to GPU with `.to('cuda')` just like any other PyTorch module
+  </Card>
+  <Card title="Automatic Differentiation" icon="function">
+    Leverage PyTorch's autograd for efficient gradient computation
+  </Card>
+  <Card title="Composability" icon="puzzle-piece">
+    Combine flows with other PyTorch modules in larger architectures
+  </Card>
+</CardGroup>
+
+## Key Features
+
+- **12+ Pre-built Flows**: Including NSF, MAF, RealNVP, CNF, and more modern architectures
+- **Conditional Modeling**: Built-in support for context-dependent distributions
+- **Custom Flows**: Easy-to-understand API for building your own flow architectures
+- **Type Safety**: Full type hints for better IDE support and code quality
+- **Research-Friendly**: Clean implementations that are easy to understand and extend
+
+## Design Philosophy
+
+Zuko's design prioritizes:
+
+1. **Simplicity**: The lazy distribution/transform pattern is easy to understand
+2. **Flexibility**: Build custom flows or use pre-built architectures
+3. **Correctness**: Implementations closely follow the original papers
+4. **Performance**: Leverages PyTorch's optimized operations
+
+The lazy pattern means you can write code that looks and feels like working with regular PyTorch distributions, while gaining the power of conditional modeling and trainable parameters.
+
+## What's Next?
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/get-started/installation">
+    Install Zuko and its dependencies
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/get-started/quickstart">
+    Train your first normalizing flow in minutes
+  </Card>
+</CardGroup>

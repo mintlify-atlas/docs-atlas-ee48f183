@@ -1,0 +1,388 @@
+---
+title: Bayesian Inference
+description: Use normalizing flows for Bayesian inference and posterior approximation
+---
+
+This guide demonstrates how to use normalizing flows for Bayesian inference, including posterior approximation, Bayesian neural networks, and uncertainty quantification.
+
+## Overview
+
+Bayesian inference aims to compute the posterior distribution $p(\theta | x)$ given data $x$ and a prior $p(\theta)$. Normalizing flows can approximate complex posteriors through variational inference.
+
+## Posterior Approximation
+
+### Variational Inference Objective
+
+The goal is to find flow parameters $\phi$ that minimize the KL divergence between the flow $q_\phi(\theta)$ and the true posterior $p(\theta | x)$:
+
+$$
+\phi^* = \arg\min_\phi \text{KL}(q_\phi(\theta) \| p(\theta | x))
+$$
+
+This is equivalent to maximizing the Evidence Lower Bound (ELBO):
+
+$$
+\mathbb{E}_{q_\phi(\theta)} [\log p(x | \theta) + \log p(\theta) - \log q_\phi(\theta)]
+$$
+
+### Basic Example
+
+Approximate a posterior distribution using a normalizing flow:
+
+```python
+import torch
+import zuko
+
+# Define your likelihood and prior
+def log_likelihood(theta, x):
+    """Compute log p(x | theta)"""
+    return ...
+
+def log_prior(theta):
+    """Compute log p(theta)"""
+    return ...
+
+# Create flow for posterior approximation
+flow = zuko.flows.NSF(
+    features=10,  # Dimension of theta
+    context=0,    # Unconditional
+    transforms=5,
+    hidden_features=[128, 128]
+)
+
+# Observed data
+x_obs = ...
+
+# Training loop
+optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
+
+for step in range(10000):
+    # Sample from flow
+    dist = flow()
+    theta = dist.rsample((64,))  # Use rsample for gradients
+    
+    # Compute ELBO
+    log_q = dist.log_prob(theta)
+    log_p = log_likelihood(theta, x_obs) + log_prior(theta)
+    elbo = (log_p - log_q).mean()
+    
+    # Maximize ELBO (minimize negative ELBO)
+    loss = -elbo
+    loss.backward()
+    
+    optimizer.step()
+    optimizer.zero_grad()
+
+# Sample from approximate posterior
+with torch.no_grad():
+    posterior_samples = flow().sample((1000,))
+```
+
+<Note>
+Use `rsample()` instead of `sample()` to enable gradient flow through the samples. This is essential for the reparameterization trick.
+</Note>
+
+## Bayesian Neural Networks
+
+Zuko provides the `BayesianModel` wrapper to make any PyTorch model Bayesian. This treats model parameters as random variables following a Gaussian distribution.
+
+### Creating a Bayesian Model
+
+```python
+import torch.nn as nn
+import zuko.bayesian
+
+# Define a regular neural network
+net = nn.Sequential(
+    nn.Linear(5, 64),
+    nn.ReLU(),
+    nn.Linear(64, 64),
+    nn.ReLU(),
+    nn.Linear(64, 1)
+)
+
+# Wrap as Bayesian model
+bayes_net = zuko.bayesian.BayesianModel(
+    net,
+    init_logvar=-9.0  # Initial log-variance of parameter distributions
+)
+```
+
+<Note>
+The `BayesianModel` wrapper stores mean $\mu_\theta$ and log-variance $\log\sigma^2_\theta$ for each parameter. Parameters are sampled as $\theta \sim \mathcal{N}(\mu_\theta, \sigma^2_\theta)$.
+</Note>
+
+### Training Bayesian Models
+
+Use the `reparameterize()` context manager for training:
+
+```python
+optimizer = torch.optim.Adam(bayes_net.parameters(), lr=1e-3)
+
+for x, y in trainloader:
+    # Compute KL divergence with prior
+    kl = bayes_net.kl_divergence(prior_var=1.0)
+    
+    # Sample model and compute loss
+    with bayes_net.reparameterize() as net:
+        y_pred = net(x)
+        likelihood_loss = torch.nn.functional.mse_loss(y_pred, y)
+    
+    # Total loss: negative ELBO
+    loss = likelihood_loss + 1e-6 * kl
+    
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+```
+
+<Warning>
+The `reparameterize()` context temporarily modifies the base model in-place. Always use it within the training loop to get fresh samples for each batch.
+</Warning>
+
+### Making Predictions
+
+For inference, sample multiple models to quantify uncertainty:
+
+```python
+bayes_net.eval()
+
+# Sample multiple predictions
+predictions = []
+for _ in range(100):
+    net_sample = bayes_net.sample_model()
+    with torch.no_grad():
+        pred = net_sample(x_test)
+    predictions.append(pred)
+
+predictions = torch.stack(predictions)
+
+# Compute mean and uncertainty
+mean_pred = predictions.mean(dim=0)
+std_pred = predictions.std(dim=0)
+```
+
+## Bayesian Normalizing Flows
+
+You can make normalizing flows Bayesian to capture uncertainty in the flow parameters:
+
+```python
+import zuko.flows
+import zuko.bayesian
+
+# Create a flow
+flow = zuko.flows.NSF(features=3, context=5)
+
+# Make it Bayesian (only last layers of each transform)
+bayes_flow = zuko.bayesian.BayesianModel(
+    flow,
+    init_logvar=-9.0,
+    include_params=["transform.transforms.*.hyper.4"],  # Last layer only
+    exclude_params=["**.bias"]  # Exclude biases
+)
+```
+
+### Selective Parameter Treatment
+
+Control which parameters are treated as Bayesian:
+
+```python
+bayes_flow = zuko.bayesian.BayesianModel(
+    flow,
+    init_logvar=-9.0,
+    include_params=[
+        "transform.transforms.0.*",  # All params in first transform
+        "transform.transforms.*.hyper.4.weight"  # Last layer weights
+    ],
+    exclude_params=["**.bias"]  # Exclude all biases
+)
+```
+
+Pattern matching rules:
+- `*`: Matches alphanumeric strings
+- `**`: Matches dot-separated alphanumeric strings  
+- Exact names: e.g., `"layer1.weight"`
+
+### Training Bayesian Flows
+
+```python
+optimizer = torch.optim.Adam(bayes_flow.parameters(), lr=1e-3)
+
+for x, c in trainloader:
+    # KL divergence with prior
+    kl = bayes_flow.kl_divergence(prior_var=1.0)
+    
+    # Negative log-likelihood
+    with bayes_flow.reparameterize() as flow:
+        nll = -flow(c).log_prob(x).mean()
+    
+    # Total loss
+    loss = nll + 1e-6 * kl
+    
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+```
+
+## Complete Bayesian Inference Example
+
+Here's a complete example for Bayesian inference on a simple problem:
+
+```python
+import torch
+import zuko
+
+# Generate synthetic data: y = sin(x) + noise
+torch.manual_seed(0)
+x_train = torch.linspace(-3, 3, 100).unsqueeze(-1)
+y_train = torch.sin(x_train) + 0.1 * torch.randn_like(x_train)
+
+# Create Bayesian model
+model = torch.nn.Sequential(
+    torch.nn.Linear(1, 64),
+    torch.nn.ReLU(),
+    torch.nn.Linear(64, 64),
+    torch.nn.ReLU(),
+    torch.nn.Linear(64, 1)
+)
+
+bayes_model = zuko.bayesian.BayesianModel(model, init_logvar=-9.0)
+optimizer = torch.optim.Adam(bayes_model.parameters(), lr=1e-3)
+
+# Train
+for epoch in range(1000):
+    kl = bayes_model.kl_divergence(prior_var=1.0)
+    
+    with bayes_model.reparameterize() as net:
+        y_pred = net(x_train)
+        mse_loss = (y_pred - y_train).square().mean()
+    
+    loss = mse_loss + 1e-6 * kl
+    
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+
+# Make predictions with uncertainty
+x_test = torch.linspace(-4, 4, 200).unsqueeze(-1)
+predictions = []
+
+for _ in range(100):
+    sampled_model = bayes_model.sample_model()
+    with torch.no_grad():
+        pred = sampled_model(x_test)
+    predictions.append(pred)
+
+predictions = torch.stack(predictions)
+mean = predictions.mean(dim=0)
+std = predictions.std(dim=0)
+
+print(f"Mean prediction shape: {mean.shape}")
+print(f"Std prediction shape: {std.shape}")
+```
+
+## Amortized Inference
+
+For multiple inference problems, use conditional flows:
+
+```python
+# Create conditional flow
+flow = zuko.flows.NSF(
+    features=5,   # Dimension of theta  
+    context=10,   # Dimension of x
+    transforms=5,
+    hidden_features=[256, 256]
+)
+
+# Train on multiple datasets
+for theta, x in dataset:
+    loss = -flow(x).log_prob(theta).mean()
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+
+# Fast inference for new data
+with torch.no_grad():
+    posterior = flow(x_new)
+    samples = posterior.sample((1000,))
+```
+
+<Tip>
+Amortized inference trains once and performs fast inference on new observations, unlike standard variational inference which requires optimization for each new dataset.
+</Tip>
+
+## Simulation-Based Inference
+
+When the likelihood is intractable but you can simulate data:
+
+```python
+def simulator(theta):
+    """Simulate x ~ p(x | theta)"""
+    return ...
+
+# Generate training data
+theta_samples = prior.sample((10000,))
+x_samples = torch.stack([simulator(theta) for theta in theta_samples])
+
+# Train flow to learn p(theta | x)
+flow = zuko.flows.NSF(features=dim_theta, context=dim_x)
+optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
+
+for theta_batch, x_batch in dataloader:
+    loss = -flow(x_batch).log_prob(theta_batch).mean()
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+
+# Perform inference
+with torch.no_grad():
+    posterior = flow(x_observed)
+    posterior_samples = posterior.sample((5000,))
+```
+
+## Advanced Topics
+
+### Local Reparameterization Trick
+
+For faster training of Bayesian models with linear layers:
+
+```python
+with bayes_model.reparameterize(local_trick=True) as net:
+    y_pred = net(x)
+    loss = mse_loss(y_pred, y)
+```
+
+This reduces variance in gradient estimates for linear layers.
+
+### Inspecting Parameter Uncertainty
+
+```python
+# Access means and log-variances
+for name, mean in bayes_model.means.items():
+    logvar = bayes_model.logvars[name]
+    print(f"{name}: mean={mean.mean():.4f}, std={logvar.exp().sqrt().mean():.4f}")
+```
+
+## Tips for Bayesian Inference
+
+<Tip>
+**KL Weight**: The weight on the KL term (e.g., `1e-6`) controls the trade-off between fitting data and staying close to the prior. Adjust based on dataset size.
+</Tip>
+
+<Tip>
+**Initialization**: The `init_logvar` parameter controls initial parameter uncertainty. Start with `-9.0` (small uncertainty) and adjust if needed.
+</Tip>
+
+<Tip>
+**Prior Variance**: Set `prior_var` in `kl_divergence()` based on your prior beliefs. A value of `1.0` corresponds to a standard Gaussian prior.
+</Tip>
+
+<Warning>
+The `sample_model()` method creates a copy of the base model, which can be memory-intensive. For large models, use `reparameterize()` during inference when possible.
+</Warning>
+
+## Next Steps
+
+- Learn about [Variational Autoencoders](/guides/variational-autoencoders)
+- See [Training Flows](/guides/training-flows) for general training tips
+- Check the [Bayesian API Reference](/api/bayesian) for more details

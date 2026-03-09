@@ -1,0 +1,409 @@
+---
+title: Bernstein Polynomial Flow (BPF)
+description: Normalizing flow using bounded Bernstein polynomial transformations
+---
+
+## Overview
+
+Bernstein Polynomial Flow (BPF) uses Bernstein polynomials to create monotonic, bounded transformations. Unlike other polynomial flows, BPF is explicitly bounded to the interval `[-5, 5]`, making it suitable for data with known ranges.
+
+<Warning>
+  The Bernstein polynomial is bounded to the interval `[-5, 5]`. Any feature outside of this domain is not transformed. It is recommended to standardize features (zero mean, unit variance) before training.
+</Warning>
+
+## References
+
+**Deep transformation models: Tackling complex regression problems with neural network based transformation models** (Sick et al., 2020)  
+[https://arxiv.org/abs/2004.00464](https://arxiv.org/abs/2004.00464)
+
+**Short-Term Density Forecasting of Low-Voltage Load using Bernstein-Polynomial Normalizing Flows** (Arpogaus et al., 2022)  
+[https://arxiv.org/abs/2204.13939](https://arxiv.org/abs/2204.13939)
+
+## Class Definition
+
+```python
+zuko.flows.BPF(
+    features: int,
+    context: int = 0,
+    degree: int = 16,
+    transforms: int = 3,
+    randperm: bool = False,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="features" type="int" required>
+  The number of features in the data.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional density estimation.
+</ParamField>
+
+<ParamField path="degree" type="int" default="16">
+  The degree M of the Bernstein polynomial. Higher degrees allow more complex transformations within the bounded domain.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of autoregressive transformations to stack.
+</ParamField>
+
+<ParamField path="randperm" type="bool" default="False">
+  Whether features are randomly permuted between transformations.
+</ParamField>
+
+<ParamField path="**kwargs" type="dict">
+  Additional keyword arguments passed to `MaskedAutoregressiveTransform`:
+  - `hidden_features`: Hidden layer sizes (default: `[64, 64]`)
+  - `activation`: Activation function (default: `ReLU`)
+</ParamField>
+
+## Usage Example
+
+```python
+import torch
+import zuko
+
+# Create an unconditional BPF
+flow = zuko.flows.BPF(
+    features=5,
+    degree=32,
+    transforms=5,
+    hidden_features=[128, 128]
+)
+
+# Sample from the flow
+dist = flow()
+samples = dist.sample((1000,))
+print(samples.shape)  # torch.Size([1000, 5])
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+print(log_prob.shape)  # torch.Size([1000])
+```
+
+### Conditional Flow
+
+```python
+# Create a conditional BPF
+flow = zuko.flows.BPF(
+    features=3,
+    context=5,
+    degree=24,
+    transforms=5
+)
+
+context = torch.randn(5)
+dist = flow(context)
+samples = dist.sample((100,))
+```
+
+### Training Example
+
+```python
+import torch.optim as optim
+
+flow = zuko.flows.BPF(
+    features=10,
+    degree=32,
+    transforms=5,
+    hidden_features=[256, 256]
+)
+
+optimizer = optim.Adam(flow.parameters(), lr=1e-3)
+
+for epoch in range(100):
+    for x in dataloader:
+        optimizer.zero_grad()
+        
+        # Standardize data to be within [-5, 5]
+        x = torch.clamp(x, -5, 5)
+        
+        loss = -flow().log_prob(x).mean()
+        loss.backward()
+        optimizer.step()
+```
+
+## Methods
+
+### `forward(c=None)`
+
+Returns a normalizing flow distribution.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `NormalizingFlow`: A distribution with:
+  - `sample(shape)`: Sample from the distribution
+  - `log_prob(x)`: Compute log probability of samples
+  - `rsample(shape)`: Reparameterized sampling
+
+## When to Use BPF
+
+<Check>**Good for:**</Check>
+
+- Bounded data with known range
+- Smooth, continuous distributions
+- When you want guaranteed monotonicity and boundedness
+- Regression and distribution forecasting
+- Lower to medium-dimensional problems
+
+<Warning>**Consider alternatives if:**</Warning>
+
+- You need unbounded transformations (use MAF)
+- You have very high-dimensional data (use NSF)
+- Your data extends beyond `[-5, 5]` significantly
+- You need maximum expressivity (use NAF/UNAF)
+
+## Tips
+
+1. **Standardize to [-5, 5]**: Normalize your data to have most values within `[-5, 5]`.
+
+2. **Higher degrees**: BPF typically needs higher degrees than SOSPF. Start with `degree=16-32`.
+
+3. **Smooth data**: BPF works best on smooth, continuous distributions without sharp transitions.
+
+4. **Forecasting**: BPF is particularly good for probabilistic forecasting tasks.
+
+## Architecture Details
+
+BPF uses Bernstein polynomials:
+
+- **Base distribution**: Diagonal Gaussian `N(0, I)`
+- **Transformation**: Bounded Bernstein polynomials
+- **Domain**: `[-5, 5]` (hard boundary)
+- **Neural network**: Masked MLP predicts Bernstein coefficients
+- **Monotonicity**: Ensured by constraining coefficients
+
+Each transformation:
+```python
+y_i = BernsteinPolynomial(x_i; w_i)
+```
+where `w_i` are coefficients predicted autoregressively, constrained to ensure monotonicity.
+
+## Bernstein Polynomials
+
+Bernstein polynomials have special properties:
+
+- **Bounded**: Always maps `[-5, 5]` to `[-5, 5]`
+- **Smooth**: Infinitely differentiable
+- **Monotonicity**: Easy to enforce via coefficient constraints
+- **Basis**: Forms a basis for continuous functions on bounded intervals
+- **Stability**: Numerically stable
+
+Definition:
+```python
+B(x; w) = sum_{i=0}^M w_i * b_{i,M}((x+5)/10)
+```
+where `b_{i,M}` are Bernstein basis polynomials.
+
+## Degree Selection
+
+| Degree | Expressivity | Parameters | Use Case |
+|--------|--------------|------------|----------|
+| 8-12 | Low | Few | Simple, unimodal |
+| 16-24 | Medium | Moderate | General purpose |
+| 32-48 | High | Many | Complex distributions |
+| 64+ | Very high | Very many | Research, benchmarks |
+
+## Comparison with Other Flows
+
+| Property | BPF | SOSPF | NSF | MAF |
+|----------|-----|-------|-----|-----|
+| Transformation | Bernstein poly | SOS poly | Spline | Affine |
+| Domain | `[-5, 5]` | `[-10, 10]` | `[-5, 5]` | Unbounded |
+| Boundedness | Hard boundary | Soft boundary | Soft boundary | None |
+| Smoothness | Very high | High | High | Low |
+| Typical degree | 16-32 | 4-10 | 8-16 bins | N/A |
+| Training speed | Medium | Medium | Medium | Fast |
+
+## Advanced Usage
+
+### High-Degree Polynomials
+
+```python
+# For very smooth, complex distributions
+flow = zuko.flows.BPF(
+    features=5,
+    degree=64,
+    transforms=5,
+    hidden_features=[512, 512]
+)
+```
+
+### Coupling Transformations
+
+```python
+# For high-dimensional data
+flow = zuko.flows.BPF(
+    features=100,
+    degree=24,
+    transforms=3,
+    passes=2  # Coupling
+)
+```
+
+### Custom Bounds
+
+```python
+# BPF is hardcoded to [-5, 5], but you can preprocess
+import torch.nn as nn
+
+class ScaledBPF(nn.Module):
+    def __init__(self, features, min_val, max_val, **kwargs):
+        super().__init__()
+        self.flow = zuko.flows.BPF(features, **kwargs)
+        self.min_val = min_val
+        self.max_val = max_val
+    
+    def forward(self, context=None):
+        dist = self.flow(context)
+        # Scale from [-5, 5] to [min_val, max_val]
+        # ... implement scaling ...
+        return dist
+```
+
+## Mathematical Details
+
+### Bernstein Basis
+
+The Bernstein basis polynomials of degree M:
+```python
+b_{i,M}(t) = C(M, i) * t^i * (1-t)^(M-i)
+```
+where `C(M, i)` is the binomial coefficient and `t ∈ [0, 1]`.
+
+### Monotonicity Constraint
+
+To ensure monotonicity:
+```python
+w_0 ≤ w_1 ≤ ... ≤ w_M
+```
+
+This is enforced by parameterizing:
+```python
+w_i = w_0 + sum_{j=1}^i exp(delta_j)
+```
+where `delta_j` are predicted by the network.
+
+### Inversion
+
+Inversion of Bernstein polynomials is done via:
+1. Analytical solution for low degrees
+2. Numerical root-finding for higher degrees
+
+Both are more stable than general polynomial inversion due to the bounded domain.
+
+## Numerical Stability
+
+BPF is numerically stable due to:
+
+- **Bounded domain**: No overflow issues
+- **Convex hull property**: Output is in convex hull of control points
+- **Stable basis**: Bernstein basis is well-conditioned
+- **No extrapolation**: All computation within `[-5, 5]`
+
+## Applications
+
+### Probabilistic Forecasting
+
+```python
+# Load forecasting (original BPF application)
+flow = zuko.flows.BPF(
+    features=1,        # Load at time t
+    context=24,        # Historical loads
+    degree=32,
+    transforms=5
+)
+
+# Predict distribution of future load
+historical = torch.randn(24)
+load_dist = flow(historical)
+load_forecast = load_dist.sample((1000,))
+```
+
+### Regression with Uncertainty
+
+```python
+# Predict conditional distributions
+flow = zuko.flows.BPF(
+    features=1,        # Target variable
+    context=10,        # Input features
+    degree=24,
+    transforms=5
+)
+
+# Get full predictive distribution
+x_input = torch.randn(10)
+y_dist = flow(x_input)
+y_mean = y_dist.sample((10000,)).mean()
+y_std = y_dist.sample((10000,)).std()
+```
+
+### Bounded Domain Modeling
+
+```python
+# For data naturally in [-1, 1] or similar
+# Scale to [-5, 5] for BPF
+data_normalized = 5 * data_in_[-1,1]
+
+flow = zuko.flows.BPF(
+    features=data_dim,
+    degree=32,
+    transforms=5
+)
+```
+
+## Comparison with NSF
+
+Both BPF and NSF use piecewise functions:
+
+| Property | BPF | NSF |
+|----------|-----|-----|
+| Basis | Bernstein polynomials | Rational quadratic splines |
+| Smoothness | C^∞ | C^1 |
+| Locality | Global | Local (per bin) |
+| Typical size | degree=16-32 | bins=8-16 |
+| Best for | Smooth distributions | General purpose |
+
+## Visualization
+
+```python
+import matplotlib.pyplot as plt
+import torch
+
+flow = zuko.flows.BPF(features=1, degree=32)
+# ... train ...
+
+# Visualize transformation
+x = torch.linspace(-5, 5, 200).unsqueeze(-1)
+with torch.no_grad():
+    dist = flow()
+    log_prob = dist.log_prob(x)
+    prob = log_prob.exp()
+
+plt.figure(figsize=(10, 4))
+plt.subplot(1, 2, 1)
+plt.plot(x.numpy(), prob.numpy())
+plt.xlabel('x')
+plt.ylabel('p(x)')
+plt.title('Learned density')
+
+# Check boundedness
+x_test = torch.linspace(-6, 6, 300).unsqueeze(-1)
+with torch.no_grad():
+    # Values outside [-5, 5] should not be transformed
+    pass
+
+plt.show()
+```
+
+## Related
+
+- [SOSPF](/api/flows/sospf) - Sum-of-squares polynomial alternative
+- [NSF](/api/flows/nsf) - Spline-based alternative
+- [BoundedBernsteinTransform](/api/transforms/polynomial) - The underlying transformation
+- [MAF](/api/flows/maf) - Simpler baseline

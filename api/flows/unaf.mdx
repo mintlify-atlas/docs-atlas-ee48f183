@@ -1,0 +1,328 @@
+---
+title: Unconstrained Neural Autoregressive Flow (UNAF)
+description: Autoregressive flow with unconstrained monotonic neural networks
+---
+
+## Overview
+
+Unconstrained Neural Autoregressive Flow (UNAF) uses unconstrained monotonic neural networks (UMNN) based on integration rather than positive weights. This allows for more flexible monotonic transformations without architectural constraints.
+
+<Warning>
+  Invertibility is only guaranteed for features within the interval `[-10, 10]`. It is recommended to standardize features (zero mean, unit variance) before training.
+</Warning>
+
+## Reference
+
+**Unconstrained Monotonic Neural Networks** (Wehenkel et al., 2019)  
+[https://arxiv.org/abs/1908.05164](https://arxiv.org/abs/1908.05164)
+
+## Class Definition
+
+```python
+zuko.flows.UNAF(
+    features: int,
+    context: int = 0,
+    transforms: int = 3,
+    randperm: bool = False,
+    signal: int = 16,
+    network: dict = {},
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="features" type="int" required>
+  The number of features in the data.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional density estimation.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of autoregressive transformations to stack.
+</ParamField>
+
+<ParamField path="randperm" type="bool" default="False">
+  Whether features are randomly permuted between transformations. If `False`, features alternate between ascending and descending order.
+</ParamField>
+
+<ParamField path="signal" type="int" default="16">
+  The number of signal features for the integrand neural network.
+</ParamField>
+
+<ParamField path="network" type="dict" default="{}">
+  Keyword arguments passed to the `UMNN` (unconstrained monotonic neural network) constructor:
+  - `hidden_features`: Hidden layer sizes for the integrand network
+  - `activation`: Activation function (default: `ELU`)
+</ParamField>
+
+<ParamField path="**kwargs" type="dict">
+  Additional keyword arguments passed to `MaskedAutoregressiveTransform`:
+  - `hidden_features`: Hidden layer sizes for the autoregressive network
+  - `activation`: Activation function
+</ParamField>
+
+## Usage Example
+
+```python
+import torch
+import zuko
+
+# Create an unconditional UNAF
+flow = zuko.flows.UNAF(
+    features=5,
+    transforms=5,
+    signal=32,
+    hidden_features=[128, 128]
+)
+
+# Sample from the flow
+dist = flow()
+samples = dist.sample((1000,))
+print(samples.shape)  # torch.Size([1000, 5])
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+print(log_prob.shape)  # torch.Size([1000])
+```
+
+### Conditional Flow
+
+```python
+# Create a conditional UNAF
+flow = zuko.flows.UNAF(
+    features=3,
+    context=5,
+    transforms=5,
+    signal=24
+)
+
+context = torch.randn(5)
+dist = flow(context)
+samples = dist.sample((100,))
+```
+
+### Training Example
+
+```python
+import torch.optim as optim
+
+flow = zuko.flows.UNAF(
+    features=10,
+    transforms=5,
+    signal=32,
+    hidden_features=[256, 256],
+    network={'hidden_features': [64, 64, 64], 'activation': torch.nn.ELU}
+)
+
+optimizer = optim.Adam(flow.parameters(), lr=1e-3)
+
+for epoch in range(100):
+    for x in dataloader:
+        optimizer.zero_grad()
+        
+        # Ensure data is in [-10, 10]
+        x = torch.clamp(x, -10, 10)
+        
+        loss = -flow().log_prob(x).mean()
+        loss.backward()
+        optimizer.step()
+```
+
+## Methods
+
+### `forward(c=None)`
+
+Returns a normalizing flow distribution.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `NormalizingFlow`: A distribution with:
+  - `sample(shape)`: Sample from the distribution
+  - `log_prob(x)`: Compute log probability of samples
+  - `rsample(shape)`: Reparameterized sampling
+
+## When to Use UNAF
+
+<Check>**Good for:**</Check>
+
+- Maximum flexibility in monotonic transformations
+- Complex, highly nonlinear distributions
+- Research and experimentation
+- When architectural constraints are limiting
+
+<Warning>**Consider alternatives if:**</Warning>
+
+- You need fast training (use NAF or NSF)
+- You need fast sampling (use RealNVP)
+- Your data is outside `[-10, 10]` and can't be standardized
+- You want simpler, more interpretable models (use MAF or NSF)
+
+## Tips
+
+1. **Standardize your data**: UNAF requires features in `[-10, 10]`. Always normalize inputs.
+
+2. **Use ELU activation**: UNAF uses ELU activation by default, which works well with integration.
+
+3. **Tune signal dimension**: Start with `signal=16`. Increase for more complex distributions.
+
+4. **Be patient**: UNAF can be slow to train due to integration but is very expressive.
+
+## Architecture Details
+
+UNAF uses integration to create monotonic transformations:
+
+- **Base distribution**: Diagonal Gaussian `N(0, I)`
+- **Transformation**: Integration of positive integrand functions
+- **Signal network**: Masked MLP predicts signal vectors and constants
+- **Integrand network**: Unconstrained MLP whose integral defines the transformation
+- **Softclip layers**: Inserted between transformations
+
+Each transformation:
+```python
+y_i = ∫[0 to x_i] g(t; signal_i) dt + constant_i
+```
+where `g` is the integrand network (always positive via exp transformation) and `signal_i`, `constant_i` are predicted autoregressively.
+
+## Unconstrained Monotonic Networks
+
+Key differences from NAF:
+
+- **No weight constraints**: Weights can be any value
+- **Integration-based**: Monotonicity via integration, not positive weights
+- **Integrand function**: Models `dy/dx` instead of `y` directly
+- **Numerical integration**: Uses ODE solvers for inversion
+
+```python
+# Simplified UMNN concept
+class UMNN(nn.Module):
+    def __init__(self, signal_dim):
+        # Unconstrained network
+        self.integrand = MLP(1 + signal_dim, 1)
+    
+    def forward(self, x, signal, constant):
+        # Integrate from 0 to x
+        def g(t):
+            inp = torch.cat([t, signal], dim=-1)
+            return exp(self.integrand(inp))  # Always positive
+        
+        integral = integrate(g, 0, x)
+        return integral + constant
+```
+
+## UNAF vs NAF
+
+| Property | UNAF | NAF |
+|----------|------|-----|
+| Weights | Unconstrained | Positive only |
+| Method | Integration | Direct evaluation |
+| Flexibility | Higher | Lower |
+| Training speed | Slower | Faster |
+| Inversion | Numerical | Numerical |
+| Stability | Good | Good |
+
+## Integration Details
+
+UNAF uses numerical integration:
+
+- **Forward pass**: Integrate from 0 to x
+- **Inverse pass**: Root finding to solve integral equation
+- **Log determinant**: Computed from integrand evaluations
+
+The integrand is made positive:
+```python
+g(t) = exp(network(t, signal) / (1 + abs(network(t, signal) / 7)))
+```
+This keeps `g(t)` in the range `[1e-3, 1e3]` for numerical stability.
+
+## Advanced Usage
+
+### Custom Integrand Network
+
+```python
+flow = zuko.flows.UNAF(
+    features=10,
+    transforms=5,
+    signal=32,
+    network={
+        'hidden_features': [128, 128, 128, 128],
+        'activation': torch.nn.Tanh  # Custom activation
+    }
+)
+```
+
+### High-Dimensional Data
+
+```python
+# Use coupling for efficiency
+flow = zuko.flows.UNAF(
+    features=100,
+    transforms=3,
+    passes=2,  # Coupling transformations
+    signal=32
+)
+```
+
+### Manual Construction
+
+```python
+from zuko.flows.autoregressive import MaskedAutoregressiveTransform
+from zuko.flows.neural import UMNN
+
+transform = MaskedAutoregressiveTransform(
+    features=10,
+    context=5,
+    univariate=UMNN(
+        signal=32,
+        hidden_features=[64, 64, 64],
+        activation=torch.nn.ELU
+    ),
+    shapes=[(32,), ()],  # Signal and constant shapes
+    hidden_features=[256, 256]
+)
+```
+
+## Computational Considerations
+
+UNAF is computationally intensive:
+
+- **Training**: Slower than NAF due to integration
+- **Memory**: Higher due to integration state
+- **Inversion**: Requires numerical root finding
+- **Gradients**: Computed via adjoint method
+
+**Optimization strategies**:
+1. Use smaller networks for the integrand
+2. Reduce signal dimensions
+3. Use coupling for high-dimensional data
+4. Adjust integration tolerances
+
+## Comparison with Other Flows
+
+| Property | UNAF | NAF | NSF | MAF |
+|----------|------|-----|-----|-----|
+| Expressivity | Very high | Very high | High | Medium |
+| Flexibility | Highest | High | Medium | Low |
+| Training speed | Very slow | Slow | Medium | Fast |
+| Sampling speed | Slow | Slow | Slow | Slow |
+| Implementation | Complex | Medium | Medium | Simple |
+
+## Research Applications
+
+UNAF is particularly useful for:
+
+- **Research**: Exploring limits of flow expressivity
+- **Benchmarking**: Comparing against other architectures
+- **Complex distributions**: Multi-modal, long-tailed, irregular
+- **Ablation studies**: Understanding monotonic transformations
+
+## Related
+
+- [NAF](/api/flows/naf) - Constrained monotonic neural networks
+- [NSF](/api/flows/nsf) - Spline-based alternative
+- [UnconstrainedMonotonicTransform](/api/transforms) - The underlying transformation
+- [MAF](/api/flows/maf) - Simpler baseline

@@ -1,97 +1,108 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Zuko: Normalizing Flows in PyTorch"
+description: "Build powerful normalizing flows for density estimation and generative modeling with PyTorch"
 ---
 
-## Setting up
+<div style={{ background: 'linear-gradient(135deg, #5d6c75 0%, #b5bec1 100%)', padding: '60px 40px', borderRadius: '12px', marginBottom: '40px' }}>
+  <h1 style={{ color: 'white', fontSize: '48px', fontWeight: 700, marginBottom: '20px', textAlign: 'center' }}>
+    Normalizing Flows Made Easy
+  </h1>
+  <p style={{ color: 'white', fontSize: '20px', textAlign: 'center', maxWidth: '800px', margin: '0 auto 30px' }}>
+    Zuko is a Python package that implements normalizing flows in PyTorch. Build conditional distributions with trainable parameters that integrate seamlessly with your neural networks.
+  </p>
+  <div style={{ display: 'flex', gap: '15px', justifyContent: 'center', flexWrap: 'wrap' }}>
+    <a href="/quickstart" style={{ background: '#f37a65', color: 'white', padding: '12px 24px', borderRadius: '4px', textDecoration: 'none', fontWeight: 600 }}>
+      Get Started
+    </a>
+    <a href="https://github.com/probabilists/zuko" style={{ background: 'rgba(255,255,255,0.2)', color: 'white', padding: '12px 24px', borderRadius: '4px', textDecoration: 'none', fontWeight: 600 }}>
+      View on GitHub
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## Why Zuko?
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+Zuko solves fundamental problems with PyTorch's distributions by introducing **LazyDistribution** and **LazyTransform** — modules whose forward pass returns distributions and transformations. This design enables conditional flows while maintaining full `nn.Module` compatibility.
 
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="PyTorch Integration" icon="fire" href="/concepts/lazy-distributions">
+    Full nn.Module support with GPU acceleration and parameter management
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Conditional Flows" icon="diagram-project" href="/concepts/normalizing-flows">
+    Express conditional distributions p(x|c) naturally and efficiently
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Rich Architecture Library" icon="layer-group" href="/api/flows/overview">
+    12+ flow architectures from NSF to CNF, all ready to use
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Flexible Composition" icon="cubes" href="/guides/custom-flows">
+    Build custom flows by composing transformations and distributions
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Quick Example
 
-Everything you need to create world-class documentation.
+Train a Neural Spline Flow to model a conditional distribution in just a few lines:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+```python
+import torch
+import zuko
 
-## Need inspiration?
+# Create a flow with 3 sample features and 5 context features
+flow = zuko.flows.NSF(3, 5, transforms=3, hidden_features=[128] * 3)
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+# Train to maximize log-likelihood
+optimizer = torch.optim.Adam(flow.parameters(), lr=1e-3)
+
+for x, c in trainset:
+    loss = -flow(c).log_prob(x)  # -log p(x | c)
+    loss = loss.mean()
+    
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+# Sample from the learned distribution
+x = flow(c_star).sample((64,))
+```
+
+## Available Flow Architectures
+
+Zuko includes implementations of major normalizing flow architectures from recent research:
+
+<CardGroup cols={3}>
+  <Card title="NSF" icon="wave-sine" href="/api/flows/nsf">
+    Neural Spline Flows (2019)
+  </Card>
+  <Card title="MAF" icon="masks-theater" href="/api/flows/maf">
+    Masked Autoregressive Flow (2017)
+  </Card>
+  <Card title="RealNVP" icon="layer-group" href="/api/flows/realnvp">
+    Real-valued Non-Volume Preserving (2016)
+  </Card>
+  <Card title="NICE" icon="sparkles" href="/api/flows/nice">
+    Non-linear Independent Components (2014)
+  </Card>
+  <Card title="CNF" icon="chart-line" href="/api/flows/cnf">
+    Continuous Normalizing Flows (2018)
+  </Card>
+  <Card title="NAF" icon="brain" href="/api/flows/naf">
+    Neural Autoregressive Flows (2018)
+  </Card>
+</CardGroup>
+
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Zuko via pip or from source
+  </Card>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Train your first normalizing flow in 5 minutes
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/normalizing-flows">
+    Learn about normalizing flows and lazy distributions
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/flows/overview">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>

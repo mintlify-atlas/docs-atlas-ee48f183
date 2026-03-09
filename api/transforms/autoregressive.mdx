@@ -1,0 +1,240 @@
+---
+title: AutoregressiveTransform
+description: Autoregressive transformation scheme for normalizing flows
+---
+
+The `AutoregressiveTransform` implements an autoregressive transformation scheme where each output dimension is computed based on previous dimensions.
+
+## Mathematical Formulation
+
+The autoregressive transformation applies a conditional transformation to each dimension:
+
+$$
+y_i = f(x_i | x_{<i})
+$$
+
+where $x_{<i}$ represents all dimensions before $i$. This creates a triangular Jacobian structure, making the log-determinant efficient to compute.
+
+## Class Definition
+
+```python
+class AutoregressiveTransform(Transform)
+```
+
+Transform via an autoregressive scheme.
+
+<ParamField path="meta" type="Callable[[Tensor], Transform]">
+  A function which returns a transformation $f$ given $x$. This meta-function receives the current state and produces a transformation to apply.
+</ParamField>
+
+<ParamField path="passes" type="int">
+  The number of passes for the inverse transformation. Since the inverse requires iterative computation, multiple passes improve accuracy.
+</ParamField>
+
+## Properties
+
+- **Domain**: `constraints.real_vector`
+- **Codomain**: `constraints.real_vector`
+- **Bijective**: `True`
+
+## Implementation Details
+
+### Forward Pass
+
+The forward pass evaluates the transformation in a single pass:
+
+```python
+def _call(self, x: Tensor) -> Tensor:
+    return self.meta(x)(x)
+```
+
+The meta-function receives the input and produces a transformation that is then applied to the same input.
+
+### Inverse Pass
+
+The inverse requires iterative refinement:
+
+```python
+def _inverse(self, y: Tensor) -> Tensor:
+    x = torch.zeros_like(y)
+    for _ in range(self.passes):
+        x = self.meta(x).inv(y)
+    return x
+```
+
+Multiple passes are needed because the inverse depends on the unknown input $x$.
+
+## Usage Examples
+
+### Basic Autoregressive Transform
+
+```python
+import torch
+import torch.nn as nn
+import zuko
+
+class AutoregressiveNet(nn.Module):
+    """Neural network for autoregressive transformation."""
+    def __init__(self, features: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(features, 64),
+            nn.ReLU(),
+            nn.Linear(64, features * 2),  # shift and scale parameters
+        )
+        
+    def forward(self, x):
+        params = self.net(x)
+        shift, scale = params.chunk(2, dim=-1)
+        return zuko.transforms.MonotonicAffineTransform(shift, scale)
+
+# Create autoregressive transform
+net = AutoregressiveNet(features=5)
+transform = zuko.transforms.AutoregressiveTransform(
+    meta=net,
+    passes=3  # Use 3 passes for inverse
+)
+
+# Apply transformation
+x = torch.randn(32, 5)
+y = transform(x)
+
+# Inverse transformation (requires multiple passes)
+x_reconstructed = transform.inv(y)
+
+# Log determinant
+ladj = transform.log_abs_det_jacobian(x, y)
+print(f"Log determinant shape: {ladj.shape}")  # [32]
+```
+
+### Autoregressive with Masking
+
+For proper autoregressive structure, use masking in your neural network:
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import zuko
+
+class MaskedLinear(nn.Linear):
+    """Linear layer with autoregressive masking."""
+    def __init__(self, in_features, out_features, mask):
+        super().__init__(in_features, out_features)
+        self.register_buffer('mask', mask)
+        
+    def forward(self, x):
+        return F.linear(x, self.weight * self.mask, self.bias)
+
+class AutoregressiveMaskedNet(nn.Module):
+    def __init__(self, features: int):
+        super().__init__()
+        # Create autoregressive mask: each output depends only on previous inputs
+        mask = torch.tril(torch.ones(features, features), diagonal=-1)
+        self.masked = MaskedLinear(features, 64, mask.expand(64, -1))
+        self.hidden = nn.Linear(64, 64)
+        self.output = nn.Linear(64, features * 2)
+        
+    def forward(self, x):
+        h = F.relu(self.masked(x))
+        h = F.relu(self.hidden(h))
+        params = self.output(h)
+        shift, scale = params.chunk(2, dim=-1)
+        return zuko.transforms.MonotonicAffineTransform(shift, scale)
+
+# Create masked autoregressive transform
+net = AutoregressiveMaskedNet(features=5)
+transform = zuko.transforms.AutoregressiveTransform(meta=net, passes=3)
+
+# Apply to data
+x = torch.randn(32, 5)
+y, ladj = transform.call_and_ladj(x)
+```
+
+### Autoregressive Flow with Multiple Layers
+
+```python
+import torch
+import torch.nn as nn
+import zuko
+
+class AutoregressiveFlow(nn.Module):
+    """Multi-layer autoregressive flow."""
+    def __init__(self, features: int, layers: int = 3):
+        super().__init__()
+        self.transforms = []
+        
+        for _ in range(layers):
+            # Alternate between autoregressive and permutation
+            net = AutoregressiveNet(features)
+            ar_transform = zuko.transforms.AutoregressiveTransform(
+                meta=net,
+                passes=3
+            )
+            self.transforms.append(ar_transform)
+            
+            # Add permutation between layers
+            perm = torch.randperm(features)
+            perm_transform = zuko.transforms.PermutationTransform(perm)
+            self.transforms.append(perm_transform)
+            
+        # Compose all transforms
+        self.flow = zuko.transforms.ComposedTransform(*self.transforms)
+        
+    def forward(self, x):
+        return self.flow(x)
+
+# Create and use flow
+flow = AutoregressiveFlow(features=10, layers=3)
+x = torch.randn(64, 10)
+y = flow(x)
+print(f"Output shape: {y.shape}")  # [64, 10]
+```
+
+## Key Considerations
+
+### Inverse Computation
+
+The inverse transformation requires multiple passes because:
+1. The transformation depends on the input: $y_i = f(x_i | x_{<i})$
+2. To compute $x$ from $y$, we need $x$ itself in the conditioning
+3. We iteratively refine $x$ starting from an initial guess (zeros)
+
+### Number of Passes
+
+More passes improve inverse accuracy but increase computation:
+- **1 pass**: Fast but may be inaccurate
+- **3 passes**: Good balance (recommended)
+- **5+ passes**: High accuracy but slower
+
+### Comparison with Coupling
+
+Autoregressive transforms have advantages and disadvantages compared to coupling transforms:
+
+**Advantages:**
+- More expressive (each dimension can depend on all previous ones)
+- Single forward pass is efficient
+
+**Disadvantages:**
+- Inverse requires multiple passes
+- Sequential computation prevents parallelization
+
+## Related Transforms
+
+- [CouplingTransform](/api/transforms/coupling) - Alternative scheme with efficient inverse
+- [MonotonicAffineTransform](/api/transforms/misc) - Common choice for the conditional transformation
+- [MonotonicRQSTransform](/api/transforms/spline) - Expressive conditional transformation
+
+## References
+
+<AccordionGroup>
+  <Accordion title="Masked Autoregressive Flow (MAF)" icon="file">
+    Papamakarios, G., Pavlakou, T., & Murray, I. (2017). Masked Autoregressive Flow for Density Estimation.  
+    https://arxiv.org/abs/1705.07057
+  </Accordion>
+  
+  <Accordion title="Inverse Autoregressive Flow (IAF)" icon="file">
+    Kingma, D. P., Salimans, T., Jozefowicz, R., Chen, X., Sutskever, I., & Welling, M. (2016). Improved Variational Inference with Inverse Autoregressive Flow.  
+    https://arxiv.org/abs/1606.04934
+  </Accordion>
+</AccordionGroup>

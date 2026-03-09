@@ -1,0 +1,389 @@
+---
+title: Sum-of-Squares Polynomial Flow (SOSPF)
+description: Normalizing flow using sum-of-squares polynomial transformations
+---
+
+## Overview
+
+Sum-of-Squares Polynomial Flow (SOSPF) uses polynomial transformations constrained to be sums of squares. This ensures monotonicity while providing smooth, expressive transformations.
+
+<Warning>
+  Invertibility is only guaranteed for features within the interval `[-10, 10]`. It is recommended to standardize features (zero mean, unit variance) before training.
+</Warning>
+
+## Reference
+
+**Sum-of-Squares Polynomial Flow** (Jaini et al., 2019)  
+[https://arxiv.org/abs/1905.02325](https://arxiv.org/abs/1905.02325)
+
+## Class Definition
+
+```python
+zuko.flows.SOSPF(
+    features: int,
+    context: int = 0,
+    degree: int = 4,
+    polynomials: int = 3,
+    transforms: int = 3,
+    randperm: bool = False,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="features" type="int" required>
+  The number of features in the data.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional density estimation.
+</ParamField>
+
+<ParamField path="degree" type="int" default="4">
+  The degree L of the polynomials. Higher degrees allow more complex transformations.
+</ParamField>
+
+<ParamField path="polynomials" type="int" default="3">
+  The number of polynomials K to sum. More polynomials increase expressivity.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of autoregressive transformations to stack.
+</ParamField>
+
+<ParamField path="randperm" type="bool" default="False">
+  Whether features are randomly permuted between transformations.
+</ParamField>
+
+<ParamField path="**kwargs" type="dict">
+  Additional keyword arguments passed to `MaskedAutoregressiveTransform`:
+  - `hidden_features`: Hidden layer sizes (default: `[64, 64]`)
+  - `activation`: Activation function (default: `ReLU`)
+</ParamField>
+
+## Usage Example
+
+```python
+import torch
+import zuko
+
+# Create an unconditional SOSPF
+flow = zuko.flows.SOSPF(
+    features=5,
+    degree=6,
+    polynomials=4,
+    transforms=5,
+    hidden_features=[128, 128]
+)
+
+# Sample from the flow
+dist = flow()
+samples = dist.sample((1000,))
+print(samples.shape)  # torch.Size([1000, 5])
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+print(log_prob.shape)  # torch.Size([1000])
+```
+
+### Conditional Flow
+
+```python
+# Create a conditional SOSPF
+flow = zuko.flows.SOSPF(
+    features=3,
+    context=5,
+    degree=8,
+    polynomials=5,
+    transforms=5
+)
+
+context = torch.randn(5)
+dist = flow(context)
+samples = dist.sample((100,))
+```
+
+### Training Example
+
+```python
+import torch.optim as optim
+
+flow = zuko.flows.SOSPF(
+    features=10,
+    degree=6,
+    polynomials=4,
+    transforms=5,
+    hidden_features=[256, 256]
+)
+
+optimizer = optim.Adam(flow.parameters(), lr=1e-3)
+
+for epoch in range(100):
+    for x in dataloader:
+        optimizer.zero_grad()
+        
+        # Ensure data is in [-10, 10]
+        x = torch.clamp(x, -10, 10)
+        
+        loss = -flow().log_prob(x).mean()
+        loss.backward()
+        optimizer.step()
+```
+
+## Methods
+
+### `forward(c=None)`
+
+Returns a normalizing flow distribution.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `NormalizingFlow`: A distribution with:
+  - `sample(shape)`: Sample from the distribution
+  - `log_prob(x)`: Compute log probability of samples
+  - `rsample(shape)`: Reparameterized sampling
+
+## When to Use SOSPF
+
+<Check>**Good for:**</Check>
+
+- Smooth, continuous distributions
+- When polynomial structure is appropriate
+- Lower-dimensional problems (< 50 features)
+- Interpretable transformations
+- When you want guaranteed monotonicity
+
+<Warning>**Consider alternatives if:**</Warning>
+
+- You have high-dimensional data (use NSF)
+- You need very complex transformations (use NAF/UNAF)
+- Your data is outside `[-10, 10]` and can't be standardized
+- You want fast computation (use MAF or RealNVP)
+
+## Tips
+
+1. **Standardize your data**: SOSPF requires features in `[-10, 10]`. Normalize inputs before training.
+
+2. **Tune polynomial degree**: Start with `degree=4-6`. Higher degrees are more expressive but harder to train.
+
+3. **Multiple polynomials**: Use 3-5 polynomials. More polynomials = more expressivity but more parameters.
+
+4. **Softclip layers**: SOSPF automatically includes softclip transformations between layers to maintain bounds.
+
+## Architecture Details
+
+SOSPF uses sum-of-squares polynomials:
+
+- **Base distribution**: Diagonal Gaussian `N(0, I)`
+- **Transformation**: Sum of squared polynomials + shift
+- **Monotonicity**: Guaranteed by SOS structure
+- **Neural network**: Masked MLP predicts polynomial coefficients
+- **Softclip layers**: Inserted between transformations
+
+Each transformation:
+```python
+y_i = sum_{k=1}^K (p_k(x_i))^2 + constant_i
+```
+where `p_k` are polynomials of degree `L` and coefficients are predicted autoregressively.
+
+## Sum-of-Squares Polynomials
+
+Key properties:
+
+- **Always positive**: Sum of squares is always ≥ 0
+- **Derivative is positive**: Ensures monotonicity
+- **Smooth**: Polynomial smoothness
+- **Flexible**: Can approximate many functions
+
+A polynomial is sum-of-squares if:
+```python
+p(x) = sum_{k=1}^K (a_{k,0} + a_{k,1}x + ... + a_{k,L}x^L)^2
+```
+
+## Polynomial Degree Selection
+
+| Degree | Expressivity | Training Difficulty | Use Case |
+|--------|--------------|---------------------|----------|
+| 2-3 | Low | Easy | Simple, unimodal |
+| 4-6 | Medium | Medium | General purpose |
+| 7-10 | High | Hard | Complex, multimodal |
+| 10+ | Very high | Very hard | Research only |
+
+## Comparison with Other Flows
+
+| Property | SOSPF | NSF | NAF | MAF |
+|----------|-------|-----|-----|-----|
+| Transformation | Polynomial | Spline | Neural | Affine |
+| Smoothness | High | High | Medium | Low |
+| Expressivity | Medium | High | Very high | Medium |
+| Training speed | Medium | Medium | Slow | Fast |
+| Interpretability | Medium | Low | Low | High |
+| Domain | `[-10, 10]` | `[-5, 5]` | `[-10, 10]` | Unbounded |
+
+## Advanced Usage
+
+### High-Degree Polynomials
+
+```python
+# For very complex distributions
+flow = zuko.flows.SOSPF(
+    features=5,
+    degree=10,
+    polynomials=7,
+    transforms=5,
+    hidden_features=[512, 512]
+)
+```
+
+### Coupling Transformations
+
+```python
+# Use coupling for efficiency with many features
+flow = zuko.flows.SOSPF(
+    features=100,
+    degree=4,
+    polynomials=3,
+    transforms=3,
+    passes=2  # Coupling instead of fully autoregressive
+)
+```
+
+### Custom Architecture
+
+```python
+from zuko.flows.autoregressive import MaskedAutoregressiveTransform
+from zuko.transforms import SOSPolynomialTransform, AdditiveTransform, ComposedTransform
+
+def ShiftedSOSP(a, constant):
+    return ComposedTransform(
+        SOSPolynomialTransform(a=a),
+        AdditiveTransform(shift=constant)
+    )
+
+transform = MaskedAutoregressiveTransform(
+    features=10,
+    univariate=ShiftedSOSP,
+    shapes=[(3, 5), ()],  # (polynomials=3, degree+1=5), constant
+    hidden_features=[256, 256]
+)
+```
+
+## Mathematical Details
+
+### Monotonicity
+
+The derivative of a SOS polynomial is:
+```python
+dy/dx = sum_{k=1}^K 2 * p_k(x) * p'_k(x)
+```
+
+While this can be negative, the integral (transformation) is still monotonic due to the SOS structure and initialization.
+
+### Inversion
+
+Inversion requires solving:
+```python
+y = sum_{k=1}^K (p_k(x))^2 + c
+```
+for `x`. This is done using numerical root-finding methods.
+
+## Numerical Stability
+
+**Challenges**:
+- High-degree polynomials can overflow
+- Numerical issues near boundaries
+- Root-finding can be unstable
+
+**Solutions**:
+1. Use softclip transformations (automatic)
+2. Limit polynomial degree (≤ 10)
+3. Proper initialization
+4. Gradient clipping during training
+
+```python
+# Training with gradient clipping
+import torch.nn.utils as utils
+
+optimizer = optim.Adam(flow.parameters(), lr=1e-3)
+
+for x in dataloader:
+    optimizer.zero_grad()
+    loss = -flow().log_prob(x).mean()
+    loss.backward()
+    utils.clip_grad_norm_(flow.parameters(), max_norm=1.0)
+    optimizer.step()
+```
+
+## Applications
+
+### Smooth Density Estimation
+
+```python
+# When you know the distribution is smooth
+flow = zuko.flows.SOSPF(
+    features=data_dim,
+    degree=6,
+    polynomials=4,
+    transforms=5
+)
+```
+
+### Low-Dimensional Data
+
+```python
+# SOSPF works well for lower dimensions
+flow = zuko.flows.SOSPF(
+    features=3,
+    degree=8,
+    polynomials=5,
+    transforms=7,
+    hidden_features=[256, 256]
+)
+```
+
+### Interpretable Models
+
+```python
+# Polynomial structure is more interpretable than neural networks
+flow = zuko.flows.SOSPF(
+    features=5,
+    degree=4,
+    polynomials=3,
+    transforms=3
+)
+
+# Can analyze polynomial coefficients after training
+```
+
+## Debugging
+
+```python
+import torch
+
+flow = zuko.flows.SOSPF(features=3, degree=4, polynomials=3)
+
+# Check monotonicity
+x = torch.linspace(-10, 10, 1000).unsqueeze(-1).repeat(1, 3)
+with torch.no_grad():
+    dist = flow()
+    y = dist.base_dist.sample((1,))
+    # Transform through flow
+    # Check that values stay in bounds
+
+# Visualize transformation
+import matplotlib.pyplot as plt
+with torch.no_grad():
+    x_test = torch.linspace(-10, 10, 200)
+    # Get transformation for first feature
+    # Plot to verify monotonicity and smoothness
+```
+
+## Related
+
+- [BPF](/api/flows/bpf) - Bernstein polynomial alternative
+- [NSF](/api/flows/nsf) - Spline-based alternative
+- [SOSPolynomialTransform](/api/transforms/polynomial) - The underlying transformation
+- [MAF](/api/flows/maf) - Simpler baseline

@@ -1,0 +1,246 @@
+---
+title: NICE
+description: Non-linear Independent Components Estimation flow
+---
+
+## Overview
+
+NICE (Non-linear Independent Components Estimation) is a coupling-based normalizing flow. By default in Zuko, NICE uses affine transformations (making it equivalent to RealNVP), but it can also be configured to use additive transformations as in the original paper.
+
+<Note>
+  In Zuko, NICE and RealNVP are equivalent by default (both use affine transformations). For the original additive NICE, use custom univariate transformations.
+</Note>
+
+## References
+
+**NICE: Non-linear Independent Components Estimation** (Dinh et al., 2014)  
+[https://arxiv.org/abs/1410.8516](https://arxiv.org/abs/1410.8516)
+
+**Density estimation using Real NVP** (Dinh et al., 2016)  
+[https://arxiv.org/abs/1605.08803](https://arxiv.org/abs/1605.08803)
+
+## Class Definition
+
+```python
+zuko.flows.NICE(
+    features: int,
+    context: int = 0,
+    transforms: int = 3,
+    randmask: bool = False,
+    **kwargs
+)
+```
+
+### Parameters
+
+<ParamField path="features" type="int" required>
+  The number of features in the data. Must be at least 2.
+</ParamField>
+
+<ParamField path="context" type="int" default="0">
+  The number of context features for conditional density estimation.
+</ParamField>
+
+<ParamField path="transforms" type="int" default="3">
+  The number of coupling transformations to stack.
+</ParamField>
+
+<ParamField path="randmask" type="bool" default="False">
+  Whether random coupling masks are used. If `False`, alternating checkered masks are used.
+</ParamField>
+
+<ParamField path="**kwargs" type="dict">
+  Additional keyword arguments passed to `GeneralCouplingTransform`:
+  - `hidden_features`: List of hidden layer sizes (default: `[64, 64]`)
+  - `activation`: Activation function (default: `ReLU`)
+  - `univariate`: Univariate transformation constructor (default: `MonotonicAffineTransform`)
+  - `shapes`: Parameter shapes for the univariate transformation
+</ParamField>
+
+## Usage Example
+
+```python
+import torch
+import zuko
+
+# Create a NICE flow (equivalent to RealNVP by default)
+flow = zuko.flows.NICE(
+    features=8,
+    transforms=4,
+    hidden_features=[128, 128]
+)
+
+# Sample from the flow
+dist = flow()
+samples = dist.sample((1000,))
+
+# Compute log probabilities
+log_prob = dist.log_prob(samples)
+```
+
+### Conditional Flow
+
+```python
+# Create a conditional NICE flow
+flow = zuko.flows.NICE(
+    features=5,
+    context=3,
+    transforms=5
+)
+
+context = torch.randn(3)
+dist = flow(context)
+samples = dist.sample((100,))
+```
+
+### Original Additive NICE
+
+```python
+from zuko.transforms import AdditiveTransform
+
+# Use additive transformations as in the original paper
+flow = zuko.flows.NICE(
+    features=10,
+    transforms=5,
+    univariate=lambda shift: AdditiveTransform(shift=shift),
+    shapes=[()]  # Only shift parameter, no scale
+)
+```
+
+### Training Example
+
+```python
+import torch.optim as optim
+
+flow = zuko.flows.NICE(
+    features=10,
+    transforms=6,
+    hidden_features=[256, 256]
+)
+
+optimizer = optim.Adam(flow.parameters(), lr=1e-3)
+
+for epoch in range(100):
+    for x in dataloader:
+        optimizer.zero_grad()
+        loss = -flow().log_prob(x).mean()
+        loss.backward()
+        optimizer.step()
+```
+
+## Methods
+
+### `forward(c=None)`
+
+Returns a normalizing flow distribution.
+
+**Arguments:**
+- `c` (Tensor, optional): Context tensor of shape `(*, context)`
+
+**Returns:**
+- `NormalizingFlow`: A distribution with:
+  - `sample(shape)`: Sample from the distribution (parallel, fast)
+  - `log_prob(x)`: Compute log probability (parallel, fast)
+  - `rsample(shape)`: Reparameterized sampling
+
+## When to Use NICE
+
+<Check>**Good for:**</Check>
+
+- Learning baselines and comparisons
+- Understanding coupling flows
+- Fast bidirectional transformations
+- Educational purposes
+
+<Warning>**Consider alternatives:**</Warning>
+
+- For production: Use RealNVP or NSF (more expressive)
+- For maximum performance: Use NSF or NAF
+- The implementations are equivalent, so prefer RealNVP for clarity
+
+## Tips
+
+1. **Use RealNVP instead**: Unless you specifically need additive transformations, RealNVP (which uses affine) is more expressive.
+
+2. **More layers**: Use 5-10 coupling layers since each layer only transforms half the features.
+
+3. **Larger networks**: Coupling layers need more capacity, use `[256, 256]` or larger.
+
+## Architecture Details
+
+NICE uses coupling transformations:
+
+- **Base distribution**: Diagonal Gaussian `N(0, I)`
+- **Coupling**: Binary mask splits features into two groups
+- **Transformation**: Affine by default, or additive in original NICE
+
+### Affine NICE (default, equivalent to RealNVP):
+```python
+y_a = x_a
+y_b = x_b * exp(s(x_a, c)) + t(x_a, c)
+```
+
+### Additive NICE (original):
+```python
+y_a = x_a
+y_b = x_b + t(x_a, c)
+```
+
+## NICE vs RealNVP
+
+| Property | NICE (Additive) | NICE/RealNVP (Affine) |
+|----------|-----------------|------------------------|
+| Jacobian | Volume preserving | Non-volume preserving |
+| Parameters | Shift only | Shift and scale |
+| Expressivity | Lower | Higher |
+| Log-det | Zero (fast) | Non-zero |
+| Use case | Historical | Practical |
+
+## Advanced Usage
+
+### Custom Coupling Patterns
+
+```python
+import torch
+from zuko.flows.coupling import GeneralCouplingTransform
+
+# Custom mask: transform first 3 of 6 features
+mask = torch.tensor([1, 1, 1, 0, 0, 0], dtype=torch.bool)
+
+transform = GeneralCouplingTransform(
+    features=6,
+    mask=mask,
+    hidden_features=[128, 128]
+)
+```
+
+### Volume-Preserving Flow
+
+```python
+from zuko.transforms import AdditiveTransform
+
+# Volume-preserving flow (det J = 1)
+flow = zuko.flows.NICE(
+    features=10,
+    transforms=8,
+    univariate=lambda shift: AdditiveTransform(shift=shift),
+    shapes=[()]
+)
+
+# The Jacobian determinant is always 1
+# Makes log_prob computation faster
+```
+
+## Historical Context
+
+NICE was one of the first successful normalizing flows:
+
+1. **2014**: NICE introduced with additive coupling
+2. **2016**: RealNVP extended to affine coupling (scale + shift)
+3. **Today**: Affine coupling is standard, making NICE and RealNVP equivalent in most implementations
+
+## Related
+
+- [RealNVP](/api/flows/realnvp) - Equivalent implementation with affine transformations
+- [GeneralCouplingTransform](/api/transforms) - The underlying coupling transformation
+- [MAF](/api/flows/maf) - Autoregressive alternative
